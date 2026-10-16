@@ -4,6 +4,7 @@ import Quickshell.Wayland
 import QtQuick
 import qs.Commons
 import qs.Ui
+import qs.services
 import "LauncherModel.js" as Model
 
 // App launcher with prefix modes. With no prefix it searches applications;
@@ -13,11 +14,20 @@ import "LauncherModel.js" as Model
 Item {
   id: root
 
-  // Injected by omarchy-shell. Menu plugins receive the shared app library.
+  // Injected by omarchy-shell. Menu plugins are meant to receive the shared
+  // app library, but omarchy 4.0.4 checks the manifest's kinds after they have
+  // passed through an Instantiator model, where Array.isArray() is false, so
+  // third-party menus get null. Until then, run our own copy of the service.
   property string omarchyPath: Quickshell.env("OMARCHY_PATH")
   property var shell: null
   property var manifest: null
-  readonly property var appLibrary: shell ? shell.appLibrary : null
+  readonly property var appLibrary: shell && shell.appLibrary ? shell.appLibrary : ownAppLibrary.item
+
+  Loader {
+    id: ownAppLibrary
+    active: root.shell !== null && !root.shell.appLibrary
+    sourceComponent: AppLibrary { }
+  }
 
   readonly property string pluginDir: localPath(Qt.resolvedUrl("."))
 
