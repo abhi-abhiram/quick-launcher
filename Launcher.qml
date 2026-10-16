@@ -421,7 +421,10 @@ Item {
 
         Item {
           width: parent.width
-          height: root.listHeight
+          // Capped to what the card has left, so rows past the screen edge
+          // stay inside the ListView and scroll into view.
+          height: Math.max(0, Math.min(root.listHeight, card.height - card.contentTopInset
+            - card.contentBottomInset - root.headerHeight - root.contentSpacing))
 
           ListView {
             id: resultList
