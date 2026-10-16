@@ -57,10 +57,22 @@ def plugin_dir(config_home: Path) -> Path:
     return config_home / "omarchy/plugins" / PLUGIN_ID
 
 
+def plugin_files(source: Path) -> list[str]:
+    """The fixed plugin files plus every script under modes/, so modes added
+    as described in the README are installed too."""
+    extra = sorted(
+        path.relative_to(source).as_posix()
+        for path in (source / "modes").rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts
+    )
+    return list(dict.fromkeys([*PLUGIN_FILES, *extra]))
+
+
 def install_files(config_home: Path) -> bool:
     """Copy the plugin into place. Returns whether an older copy was replaced."""
     source = Path(__file__).resolve().parent
-    for name in PLUGIN_FILES:
+    files = plugin_files(source)
+    for name in files:
         if not (source / name).is_file():
             raise FileNotFoundError(f"Missing plugin file: {source / name}")
     target = plugin_dir(config_home)
@@ -69,7 +81,7 @@ def install_files(config_home: Path) -> bool:
     # loads a half-copied plugin.
     staged = Path(tempfile.mkdtemp(dir=target.parent, prefix=f".{PLUGIN_ID}-"))
     try:
-        for name in PLUGIN_FILES:
+        for name in files:
             (staged / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source / name, staged / name)
         staged.chmod(0o755)

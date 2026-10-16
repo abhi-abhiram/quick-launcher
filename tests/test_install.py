@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import shutil
 from pathlib import Path
 import tempfile
 import unittest
@@ -59,6 +60,18 @@ class InstallTest(unittest.TestCase):
         self.assertTrue(text.startswith(USER_BINDINGS))
         self.assertIn('hl.unbind("SUPER + ALT + SPACE")', text)
         self.assertIn(f"omarchy-shell shell toggle {install.PLUGIN_ID} '{{}}'", text)
+
+    def test_plugin_files_include_added_mode_scripts(self):
+        source = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, source)
+        (source / "modes/__pycache__").mkdir(parents=True)
+        (source / "modes/custom.py").write_text("")
+        (source / "modes/__pycache__/custom.pyc").write_text("")
+
+        files = install.plugin_files(source)
+
+        self.assertIn("modes/custom.py", files)
+        self.assertNotIn("modes/__pycache__/custom.pyc", files)
 
     def test_install_removes_the_old_pi_button(self):
         install.install(self.config)
