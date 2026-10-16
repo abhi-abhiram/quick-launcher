@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the quick launcher as an Omarchy shell plugin on SUPER+ALT+SPACE."""
+"""Install the quick launcher as an Omarchy shell plugin."""
 
 import argparse
 from datetime import datetime
@@ -20,14 +20,11 @@ PLUGIN_FILES = (
 LEGACY_WIDGET_ID = "pi-launcher"
 LEGACY_WIDGET_FILES = ("pi-launcher.qml", "pi-launcher-projects.py")
 
-BINDING_BEGIN = "-- quick-launcher:begin"
-BINDING_END = "-- quick-launcher:end"
-BINDING = f"""{BINDING_BEGIN} (managed by quick-launcher's install.py)
--- Replaces the Omarchy apps menu.
-hl.unbind("SUPER + ALT + SPACE")
-o.bind("SUPER + ALT + SPACE", "Quick launcher", "omarchy-shell shell toggle {PLUGIN_ID} '{{}}'")
-{BINDING_END}
-"""
+# Keys are the user's to choose, so the installer only suggests a binding.
+TOGGLE_COMMAND = f"omarchy-shell shell toggle {PLUGIN_ID} '{{}}'"
+BINDING_HINT = f"""Bind a key in ~/.config/hypr/bindings.lua, for example:
+  hl.unbind("SUPER + SPACE")
+  o.bind("SUPER + SPACE", "Quick launcher", "{TOGGLE_COMMAND}")"""
 
 
 def stamp() -> str:
@@ -139,51 +136,20 @@ def remove_legacy_widget_files(config_home: Path) -> list:
     return removed
 
 
-def without_binding(text: str) -> str:
-    if BINDING_BEGIN not in text:
-        return text
-    lines = text.splitlines(keepends=True)
-    kept, inside = [], False
-    for line in lines:
-        if line.startswith(BINDING_BEGIN):
-            inside = True
-        elif inside and line.startswith(BINDING_END):
-            inside = False
-        elif not inside:
-            kept.append(line)
-    return "".join(kept).rstrip("\n") + "\n" if kept else ""
-
-
-def update_bindings(config_home: Path, add: bool):
-    """Add or remove the managed keybinding block. Returns the backup path."""
-    bindings = config_home / "hypr/bindings.lua"
-    current = bindings.read_text() if bindings.exists() else ""
-    updated = without_binding(current)
-    if add:
-        updated += ("\n" if updated else "") + BINDING
-    if updated == current:
-        return None
-    saved = backup(bindings) if bindings.exists() else None
-    bindings.parent.mkdir(parents=True, exist_ok=True)
-    write_atomic(bindings, updated)
-    return saved
+def is_bound(config_home: Path) -> bool:
+    try:
+        return PLUGIN_ID in (config_home / "hypr/bindings.lua").read_text()
+    except OSError:
+        return False
 
 
 def reload_desktop() -> None:
-    """Ask the running shell and Hyprland to pick up the changes."""
-    commands = [["omarchy-shell", "shell", "rescanPlugins"], ["hyprctl", "reload"]]
-    for command in commands:
-        try:
-            subprocess.run(command, capture_output=True, timeout=10, check=False)
-        except (OSError, subprocess.SubprocessError) as error:
-            print(f"Could not run {' '.join(command)}: {error}")
+    """Ask the running shell to pick up the plugin changes."""
+    command = ["omarchy-shell", "shell", "rescanPlugins"]
     try:
-        errors = subprocess.run(["hyprctl", "configerrors"], capture_output=True,
-                                text=True, timeout=10).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return
-    if errors:
-        print(f"Hyprland reports config errors:\n{errors}")
+        subprocess.run(command, capture_output=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError) as error:
+        print(f"Could not run {' '.join(command)}: {error}")
 
 
 def install(config_home: Path) -> list:
@@ -195,9 +161,8 @@ def install(config_home: Path) -> list:
         messages.append(f"Enabled the plugin in shell.json (backup: {saved})")
     for path in remove_legacy_widget_files(config_home):
         messages.append(f"Removed the old π bar button: {path}")
-    saved = update_bindings(config_home, add=True)
-    if saved:
-        messages.append(f"Bound SUPER+ALT+SPACE (was: Omarchy apps menu; backup: {saved})")
+    if not is_bound(config_home):
+        messages.append(BINDING_HINT)
     if replaced:
         # keepLoaded plugins stay mounted across hot reloads.
         messages.append("Updated an existing install: run `omarchy restart shell` to load it.")
@@ -213,9 +178,8 @@ def uninstall(config_home: Path) -> list:
     saved = update_shell_config(config_home, enable=False)
     if saved:
         messages.append(f"Disabled the plugin in shell.json (backup: {saved})")
-    saved = update_bindings(config_home, add=False)
-    if saved:
-        messages.append(f"SUPER+ALT+SPACE opens the Omarchy apps menu again (backup: {saved})")
+    if is_bound(config_home):
+        messages.append(f"Remove the {PLUGIN_ID} binding from ~/.config/hypr/bindings.lua.")
     return messages
 
 
@@ -228,7 +192,7 @@ def main():
     )
     parser.add_argument("--uninstall", action="store_true", help="Remove the launcher")
     parser.add_argument("--no-reload", action="store_true",
-                        help="Don't ask the running shell and Hyprland to reload")
+                        help="Don't ask the running shell to reload plugins")
     args = parser.parse_args()
     try:
         messages = uninstall(args.config_home) if args.uninstall else install(args.config_home)

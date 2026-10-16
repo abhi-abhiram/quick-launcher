@@ -49,17 +49,23 @@ class InstallTest(unittest.TestCase):
     def backups(self, path):
         return list(path.parent.glob(f"{path.name}.bak.*"))
 
-    def test_install_copies_plugin_enables_it_and_binds_the_key(self):
+    def test_install_copies_plugin_and_enables_it(self):
         install.install(self.config)
 
         target = install.plugin_dir(self.config)
         for name in install.PLUGIN_FILES:
             self.assertEqual((target / name).read_bytes(), (ROOT / name).read_bytes())
         self.assertEqual(self.shell()["plugins"], [{"id": "abhiram.menu"}, {"id": install.PLUGIN_ID}])
-        text = self.bindings.read_text()
-        self.assertTrue(text.startswith(USER_BINDINGS))
-        self.assertIn('hl.unbind("SUPER + ALT + SPACE")', text)
-        self.assertIn(f"omarchy-shell shell toggle {install.PLUGIN_ID} '{{}}'", text)
+
+    def test_install_leaves_bindings_alone_and_suggests_one(self):
+        messages = install.install(self.config)
+
+        self.assertEqual(self.bindings.read_text(), USER_BINDINGS)
+        self.assertIn(install.BINDING_HINT, messages)
+
+    def test_no_binding_hint_once_a_key_is_bound(self):
+        self.bindings.write_text(f'o.bind("SUPER + SPACE", "Quick launcher", "{install.TOGGLE_COMMAND}")\n')
+        self.assertNotIn(install.BINDING_HINT, install.install(self.config))
 
     def test_plugin_files_include_added_mode_scripts(self):
         source = Path(tempfile.mkdtemp())
@@ -82,40 +88,38 @@ class InstallTest(unittest.TestCase):
             self.assertFalse((self.config / "omarchy/bar/modules" / name).exists())
 
     def test_install_backs_up_changed_files(self):
-        original_shell, original_bindings = self.shell_json.read_text(), self.bindings.read_text()
+        original_shell = self.shell_json.read_text()
         install.install(self.config)
 
         [shell_backup] = self.backups(self.shell_json)
-        [bindings_backup] = self.backups(self.bindings)
         self.assertEqual(shell_backup.read_text(), original_shell)
-        self.assertEqual(bindings_backup.read_text(), original_bindings)
 
     def test_reinstall_is_idempotent_and_asks_for_a_restart(self):
         install.install(self.config)
-        shell, bindings = self.shell_json.read_text(), self.bindings.read_text()
+        shell = self.shell_json.read_text()
 
         messages = install.install(self.config)
 
         self.assertEqual(self.shell_json.read_text(), shell)
-        self.assertEqual(self.bindings.read_text(), bindings)
         self.assertEqual(len(self.backups(self.shell_json)), 1)
-        self.assertEqual(len(self.backups(self.bindings)), 1)
         self.assertTrue(any("omarchy restart shell" in message for message in messages))
         self.assertEqual(sorted(p.name for p in install.plugin_dir(self.config).parent.iterdir()),
                          [install.PLUGIN_ID])
 
-    def test_uninstall_restores_the_apps_menu_binding(self):
+    def test_uninstall_removes_and_disables_the_plugin(self):
         install.install(self.config)
         install.uninstall(self.config)
 
         self.assertFalse(install.plugin_dir(self.config).exists())
         self.assertEqual(self.shell()["plugins"], [{"id": "abhiram.menu"}])
-        self.assertEqual(self.bindings.read_text(), USER_BINDINGS)
+
+    def test_uninstall_reminds_about_a_leftover_binding(self):
+        self.bindings.write_text(f'o.bind("SUPER + SPACE", "Quick launcher", "{install.TOGGLE_COMMAND}")\n')
+        messages = install.uninstall(self.config)
+        self.assertTrue(any("bindings.lua" in message for message in messages))
 
     def test_uninstall_without_install_changes_nothing(self):
-        self.bindings.write_text(USER_BINDINGS + "\n\n")
         install.uninstall(self.config)
-        self.assertEqual(self.backups(self.bindings), [])
         self.assertEqual(self.backups(self.shell_json), [])
 
     def test_invalid_plugins_list_is_rejected_before_any_change(self):

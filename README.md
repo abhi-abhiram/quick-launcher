@@ -1,8 +1,7 @@
 # Quick launcher
 
-A keyboard launcher for the Omarchy shell that replaces the apps menu on
-**Super+Alt+Space**. With no prefix it searches applications, just like the
-stock menu. Typing a mode prefix switches the suggestions to that mode:
+A keyboard launcher for the Omarchy shell that replaces the apps menu. With
+no prefix it searches applications, just like the stock menu. Typing a mode prefix switches the suggestions to that mode:
 
 | Prefix          | Mode     | Suggestions                                        | Enter                      | Shift+Enter / right-click |
 |-----------------|----------|----------------------------------------------------|----------------------------|---------------------------|
@@ -36,24 +35,27 @@ The installer:
 
 - copies the plugin to `~/.config/omarchy/plugins/abhiram.quick-launcher/`
   and enables it in `~/.config/omarchy/shell.json`
-- binds Super+Alt+Space in `~/.config/hypr/bindings.lua`, in a marked block
-  that unbinds the Omarchy apps menu first
 - removes the old [pi-launcher](https://github.com/abhi-abhiram/pi-launcher)
   bar button, if present. Its pinned projects carry over.
 
-It backs up both config files before changing them and can be run again
-safely. The shell keeps a loaded launcher across hot reloads, so after an
+It backs up `shell.json` before changing it and can be run again safely. The shell keeps a loaded launcher across hot reloads, so after an
 update run `omarchy restart shell` (the installer reminds you).
 
-To uninstall, run `python3 install.py --uninstall`. Super+Alt+Space opens the
-Omarchy apps menu again.
+The installer leaves your keybindings alone. Bind a key the usual Omarchy
+way in `~/.config/hypr/bindings.lua`, unbinding the default first. For example,
+to put the launcher on Super+Space and move the Omarchy menu to
+Super+Alt+Space:
 
-You can also open the launcher straight into a mode, for example from another
-keybinding:
-
-```sh
-omarchy-shell shell toggle abhiram.quick-launcher '{"mode":"pi"}'
+```lua
+hl.unbind("SUPER + SPACE")
+hl.unbind("SUPER + ALT + SPACE")
+o.bind("SUPER + SPACE", "Quick launcher", "omarchy-shell shell toggle abhiram.quick-launcher '{}'")
+o.bind("SUPER + ALT + SPACE", "Omarchy menu", "omarchy-menu toggle")
 ```
+
+A payload such as `'{"mode":"pi"}'` opens the launcher straight into a mode.
+
+To uninstall, run `python3 install.py --uninstall` and remove the binding.
 
 ## Data
 
