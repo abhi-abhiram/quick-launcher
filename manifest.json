@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "abhiram.quick-launcher",
+  "name": "Quick launcher",
+  "version": "0.1.0",
+  "author": "abhiram",
+  "description": "App launcher with prefix modes: pi: opens pi in a project, > runs a terminal command",
+  "kinds": ["menu"],
+  "keepLoaded": true,
+  "entryPoints": { "menu": "Launcher.qml" }
+}

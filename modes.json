@@ -1,0 +1,27 @@
+{
+  "modes": [
+    {
+      "id": "pi",
+      "name": "pi",
+      "description": "Open pi in a project",
+      "icon": "π",
+      "prefixes": ["pi:"],
+      "placeholder": "Open pi in…",
+      "list": ["python3", "modes/pi.py", "list"]
+    },
+    {
+      "id": "terminal",
+      "name": "Terminal",
+      "description": "Run a command in a new terminal",
+      "icon": "",
+      "prefixes": [">", "term:"],
+      "placeholder": "Run in terminal…",
+      "list": ["python3", "modes/terminal.py", "list"],
+      "query": {
+        "label": "{query}",
+        "detail": "Run in a new terminal",
+        "action": ["python3", "modes/terminal.py", "run", "{query}"]
+      }
+    }
+  ]
+}
