@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   rust:
-    runs-on: ubuntu-latest
+    runs-on: tenki-standard-small-2c-4g
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install stable --profile minimal --component rustfmt,clippy && rustup default stable
@@ -21,7 +21,7 @@ jobs:
 
   # The v0 launcher keeps working until the switch to v1 deletes it.
   v0:
-    runs-on: ubuntu-latest
+    runs-on: tenki-standard-small-2c-4g
     steps:
       - uses: actions/checkout@v4
       - run: python3 -m unittest discover -s tests -v
