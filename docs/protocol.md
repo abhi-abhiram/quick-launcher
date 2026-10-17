@@ -98,7 +98,8 @@ start it per run. They exchange JSON Lines over the core's stdin and stdout;
 the core's stderr is the log. Any program, in any language, that can start a
 process and read and write lines of JSON can be a frontend. Unlike the
 plugin wire format, this protocol is public and stable. Every message has
-`v` (protocol version) and `type`.
+`v`, the frontend protocol's major version, and `type`. No other field
+carries the protocol version.
 
 Messages describe intent, not input devices. The Omarchy frontend's bindings
 are given in parentheses as examples; another frontend picks its own.
@@ -107,11 +108,11 @@ are given in parentheses as examples; another frontend picks its own.
 
 | type         | fields | meaning |
 |--------------|--------|---------|
-| `hello`      | `client` (string), `version` (string), `max_items` (int, optional, default 50) | First message. `client` is for logs only; the core MUST NOT behave differently because of it. `max_items` caps `items` in every `state`. The core replies `ready`. |
+| `hello`      | `client` (string), `client_version` (string), `max_items` (int, optional, default 50) | First message; its `v` is the major the frontend speaks. `client` and `client_version` name the frontend build, for logs only; the core MUST NOT behave differently because of them. `max_items` caps `items` in every `state`. The core replies `ready`. |
 | `open`       | `mode` (optional plugin id) | A session starts (window shown), optionally straight into a mode. The core resets to that mode (or none) with empty text, refreshes list plugins as needed, and sends `state`. |
 | `input`      | `seq` (int), `mode` (plugin id or `null`), `text` (string) | The typed text changed. `mode` is the mode of the newest `state` the frontend has drawn (`null` before the first), and `text` is all the text typed in that mode, without its prefix. `seq` increases with every `input`. See [Reading input as the user saw it](#reading-input-as-the-user-saw-it). |
 | `leave_mode` | — | Leave the active mode. The core puts the prefix the user typed to enter it (the mode's first prefix if it was entered another way), minus its last character, back into the text, as if the user had deleted the `:`. Does nothing without an active mode. (Backspace on empty text.) |
-| `complete`   | — | Enter the mode of the first mode hint, if any. (Tab.) |
+| `complete`   | `item` (string, optional) | Enter a mode: the selected row's, when `item` is a [mode hint](#mode-hints)'s `ref`, otherwise the first mode hint's, if any. (Tab.) |
 | `activate`   | `item` (string), `action` (string) | Run an action. `item` is the item's `ref`, `action` an action `id`. (Enter, Shift+Enter, click, an action's `key`.) |
 | `close`      | — | The session ended without running anything. (Escape, window hidden.) |
 
@@ -125,15 +126,17 @@ it, runs nothing and sends the current `state` again.
 
 | type    | fields | meaning |
 |---------|--------|---------|
-| `ready` | `protocol` (int), `version` (string) | Reply to `hello`. |
+| `ready` | `core_version` (string) | Reply to every `hello`, even one whose version the core can't speak. Its `v` is the core's major; `core_version` names the core build. |
 | `state` | see below | The complete state to draw. Sent after every message that changes it and whenever a plugin answers. |
 | `done`  | — | An action ran and the session is over. A windowed frontend hides itself; a one-shot client exits. |
 
-**Versions.** `ready.protocol` is the core's frontend protocol major. A
-frontend that doesn't support it MUST stop and report it (on stderr, or as
-a notification) rather than guess. A core that gets a `hello` whose `v` it
-doesn't support logs why and exits with a non-zero status. Within a major,
-both sides MUST ignore message types and fields they don't know.
+**Versions.** A core speaks one major. If a `hello`'s `v` differs from it,
+the core still sends `ready` (carrying its own `v`), then logs why and exits
+with a non-zero status, so the frontend learns the core's major before it
+sees EOF. A frontend that gets a `ready` whose `v` differs from its own MUST
+stop and report it (on stderr, or as a notification) rather than guess.
+Within a major, both sides MUST ignore message types and fields they don't
+know.
 
 ```json
 {"v":1,"type":"state","seq":12,
@@ -148,7 +151,7 @@ both sides MUST ignore message types and fields they don't know.
 | `mode`    | The active mode, or `null` for the plain search. |
 | `text`    | The typed text. Differs from what the frontend sent when the core changed mode, e.g. typing `pi:launch` gives mode `pi` and text `launch`. |
 | `loading` | A plugin request for this mode and text is still outstanding. |
-| `error`   | A one-line, user-readable message, or `null`. |
+| `error`   | A one-line, user-readable message, or `null`. Drawn alongside `items`, never instead of them. |
 | `items`   | Items to show, best first, at most `max_items`. This is the whole list, apps and mode hints included; the frontend adds nothing to it. |
 
 ### Reading input as the user saw it
@@ -188,6 +191,16 @@ What a frontend needs to draw a row, with no knowledge of how actions run:
   frontend runs the default on Enter or click, the alternate on Shift+Enter
   or right-click, binds every `key`, and shows the selected row's other
   actions with their keys.
+
+### Mode hints
+
+In the plain search the core adds an item for each mode whose name or
+prefix matches the text (ranked as in
+[Filtering and ranking](#filtering-and-ranking)). It's an ordinary item to
+the frontend, with one action, `{"id": "enter", "title": "Open <name>"}`.
+Activating it enters that mode with empty text, as `complete` would, and
+sends `state` rather than `done`. So a frontend that draws items generically
+can enter any mode by selection, with no special case for hints.
 
 ## Plugins
 
@@ -541,8 +554,10 @@ Every response has `v` and echoes the request `id`.
   - `refresh` (bool, default `false`): re-request the mode's items. Implies
     the launcher stays open.
   - `query` (string, optional): replace the typed text.
-- `error` becomes the state's `error`, shown in place of the items. The
-  message SHOULD be one short, user-readable sentence.
+- `error` becomes the state's `error`. If it answers a `list` or `query`,
+  that plugin contributes no items for that request. An error from
+  `activate`, or a timeout after a partial answer, leaves the items already
+  shown in place. The message SHOULD be one short, user-readable sentence.
 
 A `query` response MAY set `"more": true`. It's a partial answer: the core
 replaces that request's items with it, sends a `state` with `loading: true`,
