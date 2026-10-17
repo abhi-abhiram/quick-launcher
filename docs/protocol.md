@@ -740,7 +740,9 @@ wherever it lives.
 - The SDK's tests cover its request loop, panic handling and defaults
   against the shared wire types.
 - An end-to-end test drives the real core binary over the frontend protocol
-  from a script: hello, input, activate, close, with fixture plugins. The
+  from a script: hello, input, activate, close, with fixture plugins and
+  the recording `Platform` (compiled in only by a test-only build feature,
+  so nothing launches). The
   script is a second frontend that needs no Omarchy, Hyprland or Quickshell,
   which is the check that the core assumes nothing about the Omarchy one.
 - The QML frontend is checked with `qmllint` and by hand on Omarchy.
