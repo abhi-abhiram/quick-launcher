@@ -1,0 +1,10 @@
+[package]
+name = "quick-launcher-wire"
+description = "Wire format types shared by the quick launcher core and plugin SDK (internal)"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

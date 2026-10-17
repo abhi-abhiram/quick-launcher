@@ -96,6 +96,16 @@ qmllint Launcher.qml
 omarchy plugin validate "$PWD"
 ```
 
+The v1 core and plugin SDK ([docs/protocol.md](docs/protocol.md)) are being
+built next to v0 as a Cargo workspace under `crates/`, following
+[docs/milestones.md](docs/milestones.md). Nothing in the shell uses them yet.
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
+
 Tests use temporary directories and never launch a terminal or touch your
 desktop. To try an installer change without touching your config, use
 `python3 install.py --config-home /path/to/config --no-reload`.

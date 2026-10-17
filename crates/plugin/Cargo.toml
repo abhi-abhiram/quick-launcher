@@ -1,0 +1,9 @@
+[package]
+name = "quick-launcher-plugin"
+description = "SDK for writing quick launcher plugins"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[dependencies]
+quick-launcher-wire.workspace = true

@@ -1,0 +1,9 @@
+[package]
+name = "quick-launcher-core"
+description = "The quick launcher core: plugins, prefixes, ranking and actions"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[dependencies]
+quick-launcher-wire.workspace = true
