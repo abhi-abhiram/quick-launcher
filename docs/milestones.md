@@ -80,9 +80,8 @@ be changed then.
   `cargo clippy --all-targets -- -D warnings` and `cargo test` pass on every
   PR. `python3 tools/check.py`, added in M1, runs them along with the v0 test
   commands from the README, which keep passing until M15 deletes v0. Run it
-  before pushing. A GitHub Actions workflow runs the same commands, but only
-  when started by hand (`workflow_dispatch`), since the repository has no
-  Actions minutes; switch it to `push` and `pull_request` once it does.
+  before pushing. A GitHub Actions workflow, on Tenki runners, runs the same
+  commands on every push and PR.
 - **Crates**: `serde` + `serde_json` for JSON, `toml` for manifests and
   config. The SDK's API uses `anyhow::Result`, as the spec's examples do.
 - **The matcher lives in the wire crate** (`quick_launcher_wire::matcher`),
@@ -130,8 +129,8 @@ defined once and tested against every JSON example in the spec.
   `target/`.
 - `tools/check.py`: runs `cargo fmt --check`, `cargo clippy --all-targets
   -- -D warnings`, `cargo test`, and the v0 tests (`python3 -m unittest`,
-  `node --test`). `.github/workflows/ci.yml` runs the same commands when
-  started by hand.
+  `node --test`). `.github/workflows/ci.yml` runs the same commands on
+  every push and PR.
 - `quick-launcher-wire`: `PROTOCOL` (= 1), `Request` (`list`, `query`,
   `activate`, `cancel`), `Response` (`items`, `result`, `error`, `more`),
   `Item`, `Action`, `Run` (the six forms), `After`, `Icon` (string or
@@ -150,7 +149,7 @@ validation beyond what serde does (M7).
 - An `Icon` string parses as a glyph regardless of length.
 - A `Run` with two forms, or none, is rejected.
 - A line over 4 MiB is an error, not an allocation.
-- `python3 tools/check.py` passes on this PR.
+- `python3 tools/check.py` and the CI workflow pass on this PR.
 
 ### M2 — Matcher
 

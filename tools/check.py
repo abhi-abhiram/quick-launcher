@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run every check a PR must pass: the Rust workspace's and v0's.
 
-This is the gate for each milestone; run it before pushing. The GitHub
-Actions workflow runs the same commands, but only when started by hand.
+Run it before pushing. The CI workflow runs the same commands on every
+push and PR.
 """
 
 import subprocess

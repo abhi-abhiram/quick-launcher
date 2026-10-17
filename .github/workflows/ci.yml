@@ -1,9 +1,10 @@
 name: CI
 
-# Manual only: the repository has no Actions minutes. Run
-# `python3 tools/check.py` locally instead; switch back to `push` and
-# `pull_request` once minutes are available.
+# Runs on Tenki runners rather than GitHub-hosted ones. `python3
+# tools/check.py` runs the same checks locally.
 on:
+  push:
+  pull_request:
   workflow_dispatch:
 
 permissions:

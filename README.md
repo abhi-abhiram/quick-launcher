@@ -107,8 +107,7 @@ cargo test
 ```
 
 `python3 tools/check.py` runs all of the above, v0's tests included. Run it
-before pushing: the GitHub Actions workflow runs the same checks but only
-when started by hand.
+before pushing; the CI workflow runs the same checks on every push and PR.
 
 Tests use temporary directories and never launch a terminal or touch your
 desktop. To try an installer change without touching your config, use
