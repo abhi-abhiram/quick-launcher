@@ -218,7 +218,9 @@ impl Plugin for Pi {
     }
 
     fn activate(&mut self, a: Activate) -> anyhow::Result<Outcome> {
-        toggle_pin(&a.item)?;
+        if let Some(item) = &a.item {
+            toggle_pin(item)?;
+        }
         Ok(Outcome::refresh())
     }
 }
@@ -228,6 +230,8 @@ fn main() { quick_launcher_plugin::run(Pi) }
 
 - `run` reads requests until EOF, so the same binary works as `oneshot` or
   `persistent`.
+- `Activate::item` is `None` for the `[query_item]`, whose actions use
+  `Activate::text` instead.
 - Methods a plugin doesn't need (`query` for a list plugin, `activate` for
   one without `plugin` actions) have defaults that return an error.
 - The crate exports the core's matcher, so a `query` plugin ranks the same
@@ -286,6 +290,8 @@ timeout_ms = 2000                 # per request; default 2000
 
 # Optional: an item built from the typed text, shown first. Only for
 # kind = "list". `{query}` is replaced in every string, including argv.
+# It has no `id`: its `plugin` actions are sent with `item` set to null
+# and the typed `text`.
 [query_item]
 label = "{query}"
 detail = "Run in a new terminal"
@@ -312,8 +318,8 @@ Unknown keys MUST be ignored, so newer manifests load in older cores.
 
 ### Lifetimes
 
-- **`oneshot`**: the core starts the binary for one request and waits for it
-  to exit. Best when the plugin's work is quick and its data changes between
+- **`oneshot`**: the core starts the binary for one request, takes its
+  response and reaps it (see [Transport](#transport) for the exact steps). Best when the plugin's work is quick and its data changes between
   opens.
 - **`persistent`**: the core starts the binary on first use and keeps it
   running for later requests, so it can keep state and caches in memory.
@@ -353,7 +359,8 @@ The SDK handles both; the lifetime is only a manifest setting.
 | `actions`  | Action[] | yes      | At least one. |
 
 The core turns each item into a [frontend item](#frontend-items), with `ref`
-built from the plugin id and the item `id`.
+built from the plugin id and the item `id`. The `[query_item]` gets a `ref`
+of its own that no listed item can have, so it never collides with one.
 
 ### Actions
 
@@ -388,9 +395,11 @@ they work unchanged on any platform the core supports.
 
 ### Icons
 
-A string is a glyph (Nerd Font or emoji) when it is at most two grapheme
-clusters long, otherwise a freedesktop icon name. An object is explicit:
-`{"glyph": "󰐃"}`, `{"name": "folder"}` or `{"path": "/abs/icon.svg"}`.
+A string is always a glyph (Nerd Font or emoji), however long. Icon names
+and files use the object form: `{"name": "folder"}` (a freedesktop icon
+name on Omarchy) or `{"path": "/abs/icon.svg"}`. `{"glyph": "󰐃"}` is the
+long form of a string. There's no guessing from length, so a short icon
+name or a glyph made of several code points can't be misread.
 
 ### Filtering and ranking
 
@@ -434,6 +443,13 @@ login shell (`bash -lc` on Omarchy, about 15 ms per start). That's for
 plugins that read variables set only in shell profiles (pi's
 `PI_CODING_AGENT_*`).
 
+The setting also covers the plugin's actions. The core runs `exec` and
+`terminal` actions from a `login` plugin's items through
+`Platform::login_command` too, so a command found on the profile's `PATH`
+while listing is also found when launched, with the same variables. `open`,
+`copy` and `app` run no plugin command and are unaffected. `[query_item]`
+actions follow the same rule.
+
 ### Errors and timeouts
 
 - Invalid manifest: the plugin is skipped and the reason is logged.
@@ -476,6 +492,12 @@ an older SDK keeps working.
 - stderr is for logs. The core forwards it to its own log, prefixed with the
   plugin id.
 - A line MUST NOT exceed 4 MiB.
+- **`oneshot`**: the core writes the request line and then closes the
+  plugin's stdin. The SDK answers, reads EOF and exits. The core accepts the
+  response as soon as its line arrives, without waiting for the exit, then
+  reaps the process, killing it if it hasn't exited within `timeout_ms`.
+- **`persistent`**: stdin stays open between requests. When the core exits
+  it closes every persistent plugin's stdin, and the SDK exits at EOF.
 
 #### Requests
 
@@ -486,7 +508,7 @@ process) and `method`.
 |------------|----------------------------|--------------------------------|
 | `list`     | `list` plugins             | `{}`                           |
 | `query`    | `query` plugins            | `{"text": "what was typed"}`   |
-| `activate` | any plugin, for a `plugin` action | `{"item": "<item id>", "action": "<action id>", "text": "..."}` |
+| `activate` | any plugin, for a `plugin` action | `{"item": "<item id>" or null, "action": "<action id>", "text": "..."}`; `item` is `null` for the `[query_item]` |
 | `cancel`   | `persistent` plugins       | `{"request": <id>}`: stop work on that request; no response |
 
 ```json
@@ -543,7 +565,8 @@ pub trait Platform {
     fn open(&self, target: &str) -> io::Result<()>;
     /// Put text on the clipboard.
     fn copy(&self, text: &str) -> io::Result<()>;
-    /// Wrap argv so it runs with the user's login environment.
+    /// Wrap argv so it runs with the user's login environment. Used for
+    /// `login` plugins and for their `exec` and `terminal` actions.
     fn login_command(&self, argv: &[String]) -> Vec<String>;
     /// Where bundled plugins, user plugins and config, and state live.
     fn dirs(&self) -> &Dirs;
