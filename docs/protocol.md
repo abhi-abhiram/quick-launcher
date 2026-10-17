@@ -2,7 +2,8 @@
 
 Status: **draft for review**. Nothing here is implemented yet. It replaces the
 `modes.json` contract described in the README ("v0"); the switch happens in
-one step, see [Migrating from v0](#migrating-from-v0).
+one step, see [Migrating from v0](#migrating-from-v0). The implementation
+plan is in [milestones.md](milestones.md).
 
 The keywords MUST, SHOULD and MAY are used as in RFC 2119.
 
@@ -691,7 +692,8 @@ frontends and plugins ignore:
 Cargo.toml                 workspace
 crates/core/               quick-launcher-core: library + binary
 crates/plugin/             quick-launcher-plugin: the plugin SDK
-crates/wire/               wire format types shared by core and SDK (internal)
+crates/wire/               wire format types and the matcher, shared by core
+                           and SDK (internal)
 plugins/apps/              bundled plugin: plugin.toml + Rust binary
 plugins/pi/                bundled plugin: plugin.toml + Rust binary
 plugins/terminal/          bundled plugin: plugin.toml + Rust binary
