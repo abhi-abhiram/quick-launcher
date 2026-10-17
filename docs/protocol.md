@@ -105,13 +105,17 @@ are given in parentheses as examples; another frontend picks its own.
 |--------------|--------|---------|
 | `hello`      | `client` (string), `version` (string), `max_items` (int, optional, default 50) | First message. `client` is for logs only; the core MUST NOT behave differently because of it. `max_items` caps `items` in every `state`. The core replies `ready`. |
 | `open`       | `mode` (optional plugin id) | A session starts (window shown), optionally straight into a mode. The core resets to that mode (or none) with empty text, refreshes list plugins as needed, and sends `state`. |
-| `input`      | `seq` (int), `text` (string) | The typed text changed. `text` is all of it, which in a mode excludes the prefix. `seq` increases with every `input`. |
-| `leave_mode` | — | Leave the active mode. The core puts the mode's prefix, minus its last character, back into the text, as if the user had deleted the `:`. (Backspace on empty text.) |
+| `input`      | `seq` (int), `mode` (plugin id or `null`), `text` (string) | The typed text changed. `mode` is the mode of the newest `state` the frontend has drawn (`null` before the first), and `text` is all the text typed in that mode, without its prefix. `seq` increases with every `input`. See [Reading input as the user saw it](#reading-input-as-the-user-saw-it). |
+| `leave_mode` | — | Leave the active mode. The core puts the prefix the user typed to enter it (the mode's first prefix if it was entered another way), minus its last character, back into the text, as if the user had deleted the `:`. Does nothing without an active mode. (Backspace on empty text.) |
 | `complete`   | — | Enter the mode of the first mode hint, if any. (Tab.) |
 | `activate`   | `item` (string), `action` (string) | Run an action. `item` is the item's `ref`, `action` an action `id`. (Enter, Shift+Enter, click, an action's `key`.) |
 | `close`      | — | The session ended without running anything. (Escape, window hidden.) |
 
 Closing stdin ends the core.
+
+If an `activate` names a `ref` the core can no longer resolve (a newer
+`state` dropped that item before the user's choice arrived), the core logs
+it, runs nothing and sends the current `state` again.
 
 ### Core → frontend
 
@@ -120,6 +124,12 @@ Closing stdin ends the core.
 | `ready` | `protocol` (int), `version` (string) | Reply to `hello`. |
 | `state` | see below | The complete state to draw. Sent after every message that changes it and whenever a plugin answers. |
 | `done`  | — | An action ran and the session is over. A windowed frontend hides itself; a one-shot client exits. |
+
+**Versions.** `ready.protocol` is the core's frontend protocol major. A
+frontend that doesn't support it MUST stop and report it (on stderr, or as
+a notification) rather than guess. A core that gets a `hello` whose `v` it
+doesn't support logs why and exits with a non-zero status. Within a major,
+both sides MUST ignore message types and fields they don't know.
 
 ```json
 {"v":1,"type":"state","seq":12,
@@ -137,10 +147,21 @@ Closing stdin ends the core.
 | `error`   | A one-line, user-readable message, or `null`. |
 | `items`   | Items to show, best first, at most `max_items`. This is the whole list, apps and mode hints included; the frontend adds nothing to it. |
 
-**Keeping the text in sync.** A user can type faster than the core answers.
-A frontend MUST NOT copy `text` into its input from a `state` whose `seq` is
-lower than the last `seq` it sent. It still draws that state's items, which
-the core recomputes for its own newest text anyway.
+### Reading input as the user saw it
+
+A user can type faster than the core answers, so the frontend's view and the
+core's can briefly differ. Two rules keep them consistent:
+
+- **The core reads `input` in the frontend's mode.** If `input.mode` differs
+  from the core's mode, the core switches to `input.mode` first, then parses
+  `text` there. Typing `pi:` then `pi:l` before any reply sends both with
+  `mode: null`; both enter pi mode, and the second leaves text `l`. Typing
+  right after `complete` or `leave_mode` works the same way: what the user
+  typed is read against the screen they typed it on.
+- **The frontend doesn't take back stale text.** A frontend MUST NOT copy
+  `text` into its input from a `state` whose `seq` is lower than the last
+  `seq` it sent. It still draws that state's items, which the core
+  recomputes for its own newest text anyway.
 
 ### Frontend items
 
