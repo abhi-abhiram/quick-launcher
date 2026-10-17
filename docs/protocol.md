@@ -160,11 +160,16 @@ A user can type faster than the core answers, so the frontend's view and the
 core's can briefly differ. Two rules keep them consistent:
 
 - **The core reads `input` in the frontend's mode.** If `input.mode` differs
-  from the core's mode, the core switches to `input.mode` first, then parses
-  `text` there. Typing `pi:` then `pi:l` before any reply sends both with
-  `mode: null`; both enter pi mode, and the second leaves text `l`. Typing
-  right after `complete` or `leave_mode` works the same way: what the user
-  typed is read against the screen they typed it on.
+  from the core's mode, the core switches to `input.mode` first, then reads
+  `text` there. Prefixes are parsed only in the plain search: with
+  `mode: null` the core looks for a prefix at the start of `text` and enters
+  that mode, while a non-null `input.mode` takes `text` literally as that
+  mode's query. So typing another mode's prefix inside a mode is search
+  text; the user leaves the mode first, as in v0 (`Launcher.qml` parses
+  prefixes only while no mode is active). Typing `pi:` then `pi:l` before
+  any reply sends both with `mode: null`; both enter pi mode, and the second
+  leaves text `l`. Typing right after `complete` or `leave_mode` works the
+  same way: what the user typed is read against the screen they typed it on.
 - **Mode and text change together, and never from a stale state.** A
   `state` whose `seq` is lower than the last `seq` the frontend sent is
   stale. The frontend draws its `items`, `loading` and `error`, but keeps
