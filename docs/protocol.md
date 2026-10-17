@@ -310,7 +310,10 @@ env = "session"                   # "session" (default) or "login"; see Environm
 timeout_ms = 2000                 # per request; default 2000
 
 # Optional: an item built from the typed text, shown first. Only for
-# kind = "list". `{query}` is replaced in every string, including argv.
+# kind = "list". `{query}` is replaced in every string, including argv,
+# with the typed text trimmed. Not shown when that text is empty, or when
+# an item still in the filtered list has exactly that label (so a command
+# already in terminal history appears once).
 # It has no `id`: its `plugin` actions are sent with `item` set to null
 # and the typed `text`.
 [query_item]
@@ -767,6 +770,19 @@ the logic the core exists to remove. Order of work:
 3. `Launcher.qml` switched to the frontend protocol, with its app search
    removed. `modes.json`, `modes/*.py` and `LauncherModel.js` are deleted in
    the same change.
+
+**User data.** v0 keeps pi pins and terminal history outside the per-plugin
+folders:
+
+| data | v0 | v1 |
+|------|----|----|
+| pi pins | `$XDG_CONFIG_HOME/quick-launcher/pi-pinned.json` | `QL_CONFIG_DIR` (`$XDG_CONFIG_HOME/quick-launcher/pi/`) |
+| terminal history | `$XDG_STATE_HOME/quick-launcher/terminal-history.json` | `QL_STATE_DIR` (`$XDG_STATE_HOME/quick-launcher/terminal/`) |
+
+Each plugin reads its v0 file while its own file doesn't exist yet, and
+writes only to its own, the way `modes/pi.py` already reads pins left by the
+older pi-launcher widget (`pi` keeps that fallback too, after the v0 file).
+v0 files are never changed, so going back to v0 loses nothing.
 
 ## Open questions
 
