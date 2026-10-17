@@ -28,14 +28,18 @@ which is the one-step switch the spec asks for (*Migrating from v0*).
 | M9  | [Modes, prefixes and input](#m9--modes-prefixes-and-input) | entering a mode with `repos:` | M8 |
 | M10 | [The full result list](#m10--the-full-result-list) | mode hints, Tab, query items | M9 |
 | M11 | [Activation](#m11--activation) | plugin actions (pin, forget) | M10 |
-| M12 | [`pi` plugin](#m12--pi-plugin) | `pi:` mode, from the terminal | M3, M11 |
-| M13 | [`terminal` plugin](#m13--terminal-plugin) | `>` mode, from the terminal | M3, M11 |
+| M12 | [`pi` plugin](#m12--pi-plugin) | `pi:` mode, from the terminal | M3 |
+| M13 | [`terminal` plugin](#m13--terminal-plugin) | `>` mode, from the terminal | M3 |
 | M14 | [Plugin host: persistent, streaming, cancel](#m14--plugin-host-persistent-streaming-cancel) | `cargo test` | M7, M11 |
 | M15 | [Switch the Omarchy frontend](#m15--switch-the-omarchy-frontend) | **the shell launcher on v1** | M12–M14 |
 
+"Depends on" lists what a milestone needs to be built and tested. Trying a
+plugin through the core needs more: the core gains modes in M9, hints in
+M10 and plugin actions in M11.
+
 After M3, the `apps` plugin (M4) and the core's foundations (M5–M7) can be
 built in parallel. `pi` and `terminal` (M12, M13) can be written any time
-after M3, but you can only try them through the core once M11 lands. M14
+after M3, but you can only try them through the core once M9–M11 land. M14
 comes late because no bundled plugin needs it; it is still part of v1.
 
 ## Trying the core: `tools/dev.py`
@@ -58,11 +62,13 @@ Typing a line sends it as `input`. `!N` activates item N's default action,
 uses the real Omarchy platform, so `!1` really launches Firefox. It's a
 second frontend speaking the public protocol, which is the check the spec's
 *Testing* section asks for. The end-to-end test (`tests/e2e_core.py`) uses
-the same client code with fixture plugins and the recording platform.
+the same client code with fixture plugins and the recording platform (see
+M8).
 
 `--bundled-plugins` is a development flag. It only replaces the bundled
 plugin directory in `Dirs`; everything else still comes from `Platform`.
-M15's `install.py` reuses the same layout code.
+The plugin layout code lives in `tools/plugin_layout.py`, which `dev.py`
+uses now and `install.py` imports in M15.
 
 ## Decisions made up front
 
@@ -72,12 +78,14 @@ be changed then.
 
 - **Rust edition 2024**, one Cargo workspace. `cargo fmt --check`,
   `cargo clippy --all-targets -- -D warnings` and `cargo test` pass on every
-  PR. The v0 test commands in the README keep passing until M15 deletes v0.
+  PR, checked by a GitHub Actions workflow added in M1. The v0 test commands
+  in the README run in the same workflow and keep passing until M15 deletes
+  v0.
 - **Crates**: `serde` + `serde_json` for JSON, `toml` for manifests and
   config. The SDK's API uses `anyhow::Result`, as the spec's examples do.
 - **The matcher lives in the wire crate** (`quick_launcher_wire::matcher`),
   because the core and the SDK both need it and the SDK re-exports it. No
-  fourth crate.
+  fourth crate. protocol.md's *Repository layout* says so too.
 - **The core uses `tokio`** for plugin processes, timeouts, and reading
   stdin while plugins answer. **The SDK does not**: it uses `std` and one
   reader thread, so a plugin binary stays small and plugin authors don't
@@ -118,6 +126,9 @@ defined once and tested against every JSON example in the spec.
 - Root `Cargo.toml` workspace with `crates/wire`, plus empty `crates/core`
   and `crates/plugin` so later PRs only add code. `.gitignore` covers
   `target/`.
+- `.github/workflows/ci.yml`: on every push and PR, runs `cargo fmt
+  --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and
+  the v0 tests (`python3 -m unittest`, `node --test`).
 - `quick-launcher-wire`: `PROTOCOL` (= 1), `Request` (`list`, `query`,
   `activate`, `cancel`), `Response` (`items`, `result`, `error`, `more`),
   `Item`, `Action`, `Run` (the six forms), `After`, `Icon` (string or
@@ -136,6 +147,7 @@ validation beyond what serde does (M7).
 - An `Icon` string parses as a glyph regardless of length.
 - A `Run` with two forms, or none, is rejected.
 - A line over 4 MiB is an error, not an allocation.
+- The CI workflow passes on this PR.
 
 ### M2 — Matcher
 
@@ -173,7 +185,9 @@ Branch `feat/plugin-sdk`.
 - Builders: `Item::new(id, label).detail().icon().badge().keywords()
   .disabled().score().action()`, `Action::new(id, title).run().plugin()
   .key().after()`, `Run::{exec, terminal, app, open, copy}` with `.cwd()`,
-  `Outcome::{close, refresh, query}`.
+  `Outcome::{close, refresh, query}`. The sixth run form, `plugin`, comes
+  from `Action::plugin()` rather than a `Run` constructor, as in the spec's
+  example.
 - `run(plugin)`: reads requests until EOF and answers each one, so the same
   binary works as `oneshot` and `persistent`. Writes only protocol lines to
   stdout.
@@ -331,9 +345,14 @@ and launches them, driven from a terminal.
 - `tools/dev.py`, the terminal client described
   [above](#trying-the-core-toolsdevpy).
 - `tests/e2e_core.py`: drives the built core with fixture plugins in
-  temporary XDG directories and the recording platform (selected by a
-  test-only environment variable, so nothing launches): hello, open, input,
-  activate, close.
+  temporary XDG directories and the recording platform, so nothing
+  launches: hello, open, input, activate, close.
+- The recording platform reaches the binary only through a cargo feature,
+  `recording-platform`, which the e2e test builds with and release builds
+  never enable. With it on, the core writes each `Platform` call to a file
+  named by `QL_RECORD`. protocol.md's "no stubs" rule is about platforms
+  that don't exist yet; this is a test double, and the feature keeps it
+  out of what users run.
 
 **Not in scope.** Modes and prefixes (M9), hints and query items (M10),
 `plugin` actions and `refresh` (M11).
@@ -437,8 +456,13 @@ Branch `feat/plugin-pi`.
 
 - Recent projects from pi's session history, honouring
   `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR` and `sessionDir`.
-  Pinned first, then most recent. Missing pinned folders are disabled with
-  badge `missing`.
+  Pinned first, then most recent.
+- Rows look as they do in v0 (`rows()` in `modes/pi.py`): pinned items get
+  the `󰐃` icon, and the notes `missing` and `last used` follow the path in
+  `detail` (`~/Projects/x · last used`). No `badge` is set, so the spec's
+  `"badge":"pinned"` example stays an example. Moving the notes into badges
+  is a visible change and belongs in its own PR after v1. Missing pinned
+  folders are also `disabled`.
 - The default action opens pi in a terminal in the project. Pin and unpin
   are `plugin` actions with `refresh`.
 - Pins live in `QL_CONFIG_DIR`. While that file doesn't exist, read the v0
@@ -514,8 +538,8 @@ Branch `feat/omarchy-v1`. One PR, as the spec requires.
   `modes/*.py`, `LauncherModel.js` and their tests.
 - `install.py`: checks for `cargo`, builds the workspace in release mode,
   installs the core binary and the bundled plugins to
-  `$XDG_DATA_HOME/quick-launcher/plugins/<id>/` (reusing `tools/dev.py`'s
-  layout code), then the shell plugin as today. `--uninstall` removes both.
+  `$XDG_DATA_HOME/quick-launcher/plugins/<id>/` (importing
+  `tools/plugin_layout.py`), then the shell plugin as today. `--uninstall` removes both.
 - README: new install requirements, writing a plugin (pointing at the SDK
   and the `repos` example), updated data paths and development commands.
   protocol.md's status changes from draft to implemented.
