@@ -583,6 +583,36 @@ docs/protocol.md           this document
 install.py                 Omarchy installer: builds, copies, enables
 ```
 
+### Repository strategy
+
+Everything stays in this one repository for now.
+
+- **Core, SDK, wire crate and bundled plugins always live together.** The
+  wire format is private and changes with the SDK in any release, so
+  splitting them would turn every wire change into coordinated releases
+  across repositories.
+- **The frontend is the only clean cut.** It talks to the core only through
+  the public frontend protocol, and after the v1 switch it is all that
+  remains of today's repository (`Launcher.qml`, `manifest.json`,
+  `install.py`).
+- **Not yet, because the frontend protocol is still moving.** While it
+  changes, most changes touch both sides, and `install.py` builds the core
+  from source next to the QML. A separate frontend repository would first
+  need a way to get the core (see Distribution in
+  [Open questions](#open-questions)).
+
+Split when one of these holds: the frontend protocol is tagged stable, a
+second frontend is being built, or the core and SDK are published for use
+without Omarchy. The split is then:
+
+| repository | contents |
+|------------|----------|
+| `quick-launcher` | core, SDK, wire crate, bundled plugins, this document; publishes binaries and the SDK crate |
+| `quick-launcher-omarchy` | Omarchy frontend and installer; installs a pinned core release |
+
+Plugin authors are unaffected either way: they depend on the SDK crate,
+wherever it lives.
+
 ## Testing
 
 - The core's unit tests cover prefix parsing, hints, matching, ranking,
