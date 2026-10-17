@@ -1,8 +1,8 @@
 # Quick launcher architecture and protocols (v1, draft)
 
 Status: **draft for review**. Nothing here is implemented yet. It replaces the
-`modes.json` contract described in the README ("v0"), which keeps working
-until every bundled mode is ported; see [Migrating from v0](#migrating-from-v0).
+`modes.json` contract described in the README ("v0"); the switch happens in
+one step, see [Migrating from v0](#migrating-from-v0).
 
 The keywords MUST, SHOULD and MAY are used as in RFC 2119.
 
@@ -23,7 +23,11 @@ The keywords MUST, SHOULD and MAY are used as in RFC 2119.
   for now, but only one platform module inside the core knows that.
 - **Rust only, for the core and every plugin.** Plugins are written against
   the SDK's `Plugin` trait. How the SDK talks to the core is private to the
-  two, so it can change without breaking plugin code. Frontends are the
+  two, so it can change without breaking plugin code. This is a contract,
+  not a barrier: the wire format is plain JSON that a Python script could
+  speak. Ruling that out gives up a plugin ecosystem open to every language
+  in exchange for being free to change the wire format in any release; such
+  plugins are unsupported and may break on any update. Frontends are the
   exception: they use whatever their toolkit needs (QML today), which is why
   the frontend protocol is public JSON.
 
@@ -251,7 +255,11 @@ The core reads plugins from, in order:
 1. the bundled plugin directory, `$XDG_DATA_HOME/quick-launcher/plugins/<id>/`
 2. the user plugin directory, `$XDG_CONFIG_HOME/quick-launcher/plugins/<id>/`
 
-These are the Omarchy (Linux) paths; the core gets them from `Platform`. A
+These are the Omarchy (Linux) paths; the core gets them from `Platform`. The
+bundled directory is per user because `install.py` builds the plugins from
+source for that user. If releases ship prebuilt binaries instead (see
+Distribution in [Open questions](#open-questions)), bundled plugins move to
+the install prefix, so the two decisions change together. A
 user plugin with the same `id` as a bundled one replaces it. The folder name
 MUST equal the manifest `id`. Both directories are watched; adding, editing
 or removing a plugin takes effect the next time the launcher opens.
@@ -732,7 +740,7 @@ The bundled plugins, once ported:
 | `list` argv, any language | Rust binary built with the SDK, `bin` + `kind = "list"` |
 | row `action` | `actions[0]` with `run.exec` |
 | row `secondary` | `actions[1]`, usually `run.plugin` with `after = "refresh"` |
-| `query` row template | `[query_item]` |
+| `query` row template, rebuilt by QML on each keystroke | `[query_item]`, filled in by the core with no process start |
 | every command runs through `bash -lc` | only with `env = "login"` |
 
 The switch happens in one step, not alongside v0. Running both would mean
