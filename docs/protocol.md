@@ -186,7 +186,10 @@ core's can briefly differ. Two rules keep them consistent:
 The **query** is `state.text` with leading and trailing whitespace removed.
 It's the one string everything else uses: the core filters on it, mode
 hints match against it, `query` and `activate` requests carry it to
-plugins as `text`, and `{query}` in a `[query_item]` becomes it. `state.text`
+plugins as `text`, and `{query}` in a `[query_item]` becomes it. The one
+exception is activating a `[query_item]`: its `activate` carries the text
+its `ref` recorded, which differs from the current query when newer input
+arrived first (see [Items](#items)). `state.text`
 itself keeps trailing whitespace, so the frontend's field doesn't jump
 while the user types a space.
 
@@ -470,9 +473,10 @@ given, sorted by `score` when present.
 The plain search runs the same matcher over every global plugin's items and
 the mode hints, and sorts them all together:
 
-1. Mode hints whose text names the mode outright (`pi`, `term`).
+1. Mode hints whose mode the query names outright (`pi`, `term`).
 2. Global items, by match quality. Ties go to plugins in discovery order,
-   then each plugin's own order. With empty text, each plugin's own order.
+   then each plugin's own order. With an empty query, each plugin's own
+   order.
 3. Other mode hints.
 
 This keeps today's order (named modes, then apps, then other modes) while
