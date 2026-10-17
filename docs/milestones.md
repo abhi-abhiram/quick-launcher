@@ -245,6 +245,10 @@ Branch `feat/core-platform`.
   uwsm-app`, `xdg-terminal-exec --dir`, `xdg-open`, `wl-copy`,
   `bash -lc 'exec "$@"'`, XDG directories with their usual fallbacks.
 - `Recording` platform for tests: stores each call and never runs anything.
+  It is compiled only under `#[cfg(any(test, feature = "recording-platform"))]`,
+  so the core's unit tests get it without the feature and release builds
+  never contain it. M8 uses the feature to put it in the binary for the e2e
+  test.
 - `run_action(platform, run, plugin)`: maps `exec`/`terminal`/`app`/`open`/
   `copy` to `Platform`. `cwd` defaults to home, relative `exec` argv paths
   resolve against the plugin folder, and `exec` and `terminal` go through
@@ -343,13 +347,14 @@ and launches them, driven from a terminal.
   stdin exits 0.
 - `--bundled-plugins <dir>` development flag.
 - `tools/dev.py`, the terminal client described
-  [above](#trying-the-core-toolsdevpy).
+  [above](#trying-the-core-toolsdevpy), and `tools/plugin_layout.py`, which
+  builds `target/plugins/<id>/` for it.
 - `tests/e2e_core.py`: drives the built core with fixture plugins in
   temporary XDG directories and the recording platform, so nothing
   launches: hello, open, input, activate, close.
-- The recording platform reaches the binary only through a cargo feature,
-  `recording-platform`, which the e2e test builds with and release builds
-  never enable. With it on, the core writes each `Platform` call to a file
+- The recording platform (gated since M5) reaches the binary only through
+  the `recording-platform` cargo feature, which the e2e test builds with and
+  release builds never enable. With it on, the core writes each `Platform` call to a file
   named by `QL_RECORD`. protocol.md's "no stubs" rule is about platforms
   that don't exist yet; this is a test double, and the feature keeps it
   out of what users run.
