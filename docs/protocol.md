@@ -14,9 +14,12 @@ The keywords MUST, SHOULD and MAY are used as in RFC 2119.
   the core filters them. Plugins that must see every keystroke stay running,
   so there is no startup cost per keystroke.
 - **Nothing passes through a shell.** Actions are argv arrays.
-- **The core is UI- and platform-agnostic.** Omarchy is the only supported
-  platform for now, but nothing outside the UI and one platform module knows
-  that. A macOS UI later is a new window plus a second platform module.
+- **The core doesn't care about the frontend.** Any program that speaks the
+  [frontend protocol](#frontend-protocol) is a frontend: the Omarchy shell
+  window today, and a macOS window, a terminal client or a test script later.
+  The core never knows which one is connected.
+- **The core is platform-agnostic.** Omarchy is the only supported platform
+  for now, but only one platform module inside the core knows that.
 - **Rust first.** The core, the bundled plugins and the plugin SDK are Rust.
   Plugins only need to speak JSON over stdio, so a shell or Python plugin
   still works.
@@ -24,79 +27,95 @@ The keywords MUST, SHOULD and MAY are used as in RFC 2119.
 ## Architecture
 
 ```
-┌──────────────┐  UI protocol   ┌────────────────────┐  plugin protocol  ┌───────────────┐
-│ UI           │◄──────────────►│ core               │◄─────────────────►│ pi plugin     │
-│ (Omarchy QML)│  JSON over     │ (Rust)             │  JSON over stdio, ├───────────────┤
-│ window, keys,│  stdio         │ plugins, prefixes, │  one process per  │ terminal      │
-│ apps search  │                │ matching, actions  │  plugin           ├───────────────┤
-└──────────────┘                │ ┌────────────────┐ │                   │ user plugins… │
-                                │ │ Platform:      │ │                   └───────────────┘
-                                │ │ Omarchy        │ │
-                                │ └────────────────┘ │
+┌──────────────┐    frontend    ┌────────────────────┐  plugin protocol  ┌───────────────┐
+│ frontend     │◄──────────────►│ core               │◄─────────────────►│ apps          │
+│ (any; Omarchy│    protocol    │ (Rust)             │  JSON over stdio, ├───────────────┤
+│ QML today)   │  JSON, stdio   │ plugins, prefixes, │  one process per  │ pi            │
+│ draws state, │                │ ranking, actions   │  plugin           ├───────────────┤
+│ sends input  │                │ ┌────────────────┐ │                   │ terminal      │
+└──────────────┘                │ │ Platform:      │ │                   ├───────────────┤
+                                │ │ Omarchy        │ │                   │ user plugins… │
+                                │ └────────────────┘ │                   └───────────────┘
                                 └────────────────────┘
 ```
 
-- **UI**: draws the window, handles keys, searches apps and launches them.
-  It holds no launcher logic: it sends what was typed or chosen and draws the
-  state the core sends back. The only UI today is the Omarchy shell plugin
-  (`Launcher.qml`).
+- **Frontend**: draws the list and takes input. It holds no launcher logic
+  and no search of its own: it sends what was typed or chosen and draws the
+  state the core sends back. The only frontend today is the Omarchy shell
+  plugin (`Launcher.qml`).
 - **Core**: `quick-launcher-core`, one Rust binary. It discovers plugins,
-  parses prefixes, runs plugin processes, filters and ranks items, and runs
-  actions through its platform module.
+  parses prefixes, runs plugin processes, filters and ranks every item (apps
+  included), and runs actions through its platform module.
 - **Platform**: a module inside the core holding everything OS-specific. See
   [Platform](#platform).
 - **Plugin**: a folder with a `plugin.toml` manifest and an executable that
   speaks the [plugin protocol](#plugin-protocol).
 
-### Why apps stay in the UI
+### Apps are a plugin
 
-Omarchy's shell already has an app library with icons, hidden entries, launch
-feedback and uninstall. Rewriting that in the core would be more work and a
-worse result on Omarchy. So apps are the one search the UI does itself, and
-the core marks where its own items go relative to the apps (see
-[`placement`](#ui-items)). A later macOS UI can supply macOS apps the same way,
-or a Rust apps plugin can replace both; the core doesn't change either way.
+Searching apps is a bundled plugin, `apps`, not frontend code. It reads the
+platform's installed apps (desktop entries on Omarchy) and is
+[`global`](#kinds), so its items show in the plain search. The core ranks apps
+together with mode hints and other global items and sends one finished list.
+Every frontend gets apps without writing an app search, and the core holds
+everything that can be launched in one place.
+
+Finding apps is OS-specific, and that code lives in the plugin: a macOS build
+of it would read `/Applications` instead. Launching goes through `Platform`
+with the [`app`](#actions) run form. The cost is Omarchy's app-library extras
+(launch feedback, uninstall); see [Open questions](#open-questions).
 
 ### Rules that keep the core agnostic
 
+- The core MUST NOT know which frontend is connected or behave differently
+  for one. Nothing in the core refers to windows, keys, pointers, focus or
+  layout.
+- Everything a frontend shows arrives as data in the frontend protocol. Key
+  bindings, layout, animation and icon rendering live only in the frontend.
 - The core MUST NOT depend on Quickshell, Hyprland, Omarchy or any UI
   toolkit. Its crate builds and its tests pass on a machine without them.
 - Every OS call (starting processes detached, terminals, opening URLs, the
   clipboard, config and state paths, login environments) goes through the
   `Platform` trait. No other core module calls OS tools directly.
 - Nothing plugin-specific lives in the core. The core never knows what pi is.
-- There is exactly one `Platform` implementation and one UI until a second is
-  actually being built. No stubs, no `cfg` branches for platforms that don't
-  exist yet.
+- There is exactly one `Platform` implementation and one frontend until a
+  second is actually being built. No stubs, no `cfg` branches for platforms
+  that don't exist yet.
 
-## UI protocol
+## Frontend protocol
 
-The UI starts the core once, as a long-running child process, and keeps it
-for the life of the shell (the Omarchy plugin is `keepLoaded`). They exchange
-JSON Lines over the core's stdin and stdout; the core's stderr is the log.
-Every message has `v` (protocol version) and `type`.
+A frontend starts the core as a long-running child process and keeps it for
+as long as it wants results. The Omarchy shell plugin is `keepLoaded`, so it
+keeps the core for the life of the shell; a one-shot terminal client could
+start it per run. They exchange JSON Lines over the core's stdin and stdout;
+the core's stderr is the log. Any program that can start a process and read
+and write lines of JSON can be a frontend. Every message has `v` (protocol
+version) and `type`.
 
-### UI → core
+Messages describe intent, not input devices. The Omarchy frontend's bindings
+are given in parentheses as examples; another frontend picks its own.
 
-| type       | fields | meaning |
-|------------|--------|---------|
-| `hello`    | `ui` (string), `version` (string) | First message. The core replies `ready`. |
-| `open`     | `mode` (optional plugin id) | The window was shown, optionally straight into a mode. The core resets to that mode (or none) with an empty query, refreshes list plugins as needed, and sends `state`. |
-| `input`    | `seq` (int), `text` (string) | The search field changed. `text` is the whole field, which in a mode excludes the prefix. `seq` increases with every `input`. |
-| `back`     | — | Backspace on an empty field. Leaves the mode. |
-| `complete` | — | Tab. Enters the mode of the first mode hint, if any. |
-| `activate` | `item` (string), `action` (string) | Run an action of a core item. `item` is the item's `ref`, `action` an action `id`. |
-| `close`    | — | The window was hidden. |
+### Frontend → core
+
+| type         | fields | meaning |
+|--------------|--------|---------|
+| `hello`      | `client` (string), `version` (string), `max_items` (int, optional, default 50) | First message. `client` is for logs only; the core MUST NOT behave differently because of it. `max_items` caps `items` in every `state`. The core replies `ready`. |
+| `open`       | `mode` (optional plugin id) | A session starts (window shown), optionally straight into a mode. The core resets to that mode (or none) with empty text, refreshes list plugins as needed, and sends `state`. |
+| `input`      | `seq` (int), `text` (string) | The typed text changed. `text` is all of it, which in a mode excludes the prefix. `seq` increases with every `input`. |
+| `leave_mode` | — | Leave the active mode. The core puts the mode's prefix, minus its last character, back into the text, as if the user had deleted the `:`. (Backspace on empty text.) |
+| `complete`   | — | Enter the mode of the first mode hint, if any. (Tab.) |
+| `activate`   | `item` (string), `action` (string) | Run an action. `item` is the item's `ref`, `action` an action `id`. (Enter, Shift+Enter, click, an action's `key`.) |
+| `close`      | — | The session ended without running anything. (Escape, window hidden.) |
 
 Closing stdin ends the core.
 
-### Core → UI
+### Core → frontend
 
 | type    | fields | meaning |
 |---------|--------|---------|
 | `ready` | `protocol` (int), `version` (string) | Reply to `hello`. |
 | `state` | see below | The complete state to draw. Sent after every message that changes it and whenever a plugin answers. |
-| `close` | — | Hide the window (an action ran and asked to close). |
+| `done`  | — | An action ran and the session is over. A windowed frontend hides itself; a one-shot client exits. |
 
 ```json
 {"v":1,"type":"state","seq":12,
@@ -109,35 +128,37 @@ Closing stdin ends the core.
 |-----------|---------|
 | `seq`     | The newest `input` the core has applied. |
 | `mode`    | The active mode, or `null` for the plain search. |
-| `text`    | The search field's content. Differs from what the UI sent when the core changed mode, e.g. typing `pi:launch` gives mode `pi` and text `launch`. |
+| `text`    | The typed text. Differs from what the frontend sent when the core changed mode, e.g. typing `pi:launch` gives mode `pi` and text `launch`. |
 | `loading` | A plugin request for this mode and text is still outstanding. |
 | `error`   | A one-line, user-readable message, or `null`. |
-| `items`   | Items to show, best first. In the plain search these are only the core's own items; the UI merges them with apps. |
+| `items`   | Items to show, best first, at most `max_items`. This is the whole list, apps and mode hints included; the frontend adds nothing to it. |
 
-**Keeping the field in sync.** A user can type faster than the core answers.
-The UI MUST NOT copy `text` into the field from a `state` whose `seq` is lower
-than the last `seq` it sent. It still draws that state's items, which the
-core recomputes for its own newest text anyway.
+**Keeping the text in sync.** A user can type faster than the core answers.
+A frontend MUST NOT copy `text` into its input from a `state` whose `seq` is
+lower than the last `seq` it sent. It still draws that state's items, which
+the core recomputes for its own newest text anyway.
 
-### UI items
+### Frontend items
 
-What the UI needs to draw a row, with no knowledge of how actions run:
+What a frontend needs to draw a row, with no knowledge of how actions run:
 
 ```json
 {"ref":"pi/~/Projects/quick-launcher","label":"quick-launcher",
  "detail":"~/Projects/quick-launcher","icon":{"glyph":"π"},"badge":"pinned",
- "disabled":false,"placement":"after_apps",
+ "disabled":false,
  "actions":[{"id":"open","title":"Open pi"},{"id":"unpin","title":"Unpin","key":"ctrl+p"}]}
 ```
 
-- `ref` identifies the item to the core; the UI treats it as opaque.
+- `ref` identifies the item to the core; the frontend treats it as opaque.
 - `icon` is always an explicit object (`glyph`, `name` or `path`); the core
-  has already resolved the shorthand forms plugins may use.
-- `placement` matters only in the plain search: `before_apps` or
-  `after_apps`. Mode hints are `before_apps` when the text names the mode
-  outright (`pi`, `term`), otherwise `after_apps`.
-- Key bindings are the same as for plugins: Enter runs the first action,
-  Shift+Enter the second, and an action's `key` its own shortcut.
+  has already resolved the shorthand forms plugins may use. A frontend that
+  can't draw a form shows no icon.
+- The first action is the item's **default**, the second its **alternate**.
+  A frontend SHOULD make both easy to reach; how is up to it. `key` is a
+  suggested shortcut that a frontend MAY bind and MAY ignore. The Omarchy
+  frontend runs the default on Enter or click, the alternate on Shift+Enter
+  or right-click, binds every `key`, and shows the selected row's other
+  actions with their keys.
 
 ## Plugin protocol
 
@@ -178,6 +199,8 @@ placeholder = "Open pi in…"       # shown in the empty search field
 exec = ["./pi-plugin"]            # required; argv, relative paths resolve
                                   #   against the plugin folder
 kind = "list"                     # "list" (default) or "query"
+global = false                    # list plugins only: also searched in the
+                                  #   plain search; see Kinds
 lifetime = "oneshot"              # "oneshot" (default) or "persistent"
 env = "session"                   # "session" (default) or "login"; see Environment
 timeout_ms = 2000                 # per request; default 2000
@@ -199,6 +222,10 @@ Unknown keys MUST be ignored, so newer manifests load in older cores.
   item, and the core filters and ranks them as you type. Use this whenever
   the full set is small enough to send at once (up to a few thousand items).
   pi projects and terminal history are list plugins.
+
+  A list plugin with `global = true` is also asked for its items when the
+  launcher opens, and the core searches them in the plain search, not only in
+  the plugin's mode. `apps` is global.
 - **`query`**: the core sends a `query` request on every keystroke, and the
   plugin returns items for that text, already filtered and ranked. Use this
   when the items depend on the text (calculator, web search, file search over
@@ -294,21 +321,20 @@ the rest, so plugins MAY answer in order without tracking cancellation.
 | `score`    | number   | no       | `query` plugins only: higher ranks first. Otherwise list order is kept. |
 | `actions`  | Action[] | yes      | At least one. |
 
-The core turns each item into a [UI item](#ui-items), with `ref` built from
-the plugin id and the item `id`.
+The core turns each item into a [frontend item](#frontend-items), with `ref`
+built from the plugin id and the item `id`.
 
 ### Actions
 
-The first action runs on **Enter** (or click). The second runs on
-**Shift+Enter** (or right-click). An action MAY set `key` (for example
-`"ctrl+d"`) to get its own shortcut. The selected row shows its non-default
-actions and their keys.
+The first action is the item's default and the second its alternate. How a
+user triggers them is up to the frontend (see
+[Frontend items](#frontend-items)).
 
 | field   | type   | meaning |
 |---------|--------|---------|
 | `id`    | string | Sent back in `activate`. Defaults to the action's index. |
-| `title` | string | Shown in the row's action hints. |
-| `key`   | string | Optional extra shortcut. |
+| `title` | string | Names the action wherever the frontend lists actions. |
+| `key`   | string | Optional suggested shortcut, e.g. `"ctrl+d"`. Frontends MAY bind it. |
 | `run`   | object | What to do; exactly one of the forms below. |
 | `after` | string | `"close"` (default) or `"refresh"`. Ignored for `plugin` actions, which decide in their `result`. |
 
@@ -318,6 +344,7 @@ actions and their keys.
 |------|--------|
 | `{"exec": [argv], "cwd": "..."}` | Start detached. |
 | `{"terminal": [argv], "cwd": "..."}` | Start in the user's terminal. |
+| `{"app": "<app id>"}` | Launch an installed app by its platform id (a desktop entry id such as `firefox.desktop` on Omarchy). Used by `apps`. |
 | `{"open": "url or path"}` | Open with the default handler. |
 | `{"copy": "text"}` | Put text on the clipboard. |
 | `{"plugin": "<action id>"}` | Send `activate` to the plugin and apply its `result`. |
@@ -341,6 +368,17 @@ For `list` plugins the core filters on `label`, then `detail`, then
 keep the plugin's order, so a plugin controls the order of an empty query
 (pinned first, then most recent). For `query` plugins the core shows items as
 given, sorted by `score` when present.
+
+The plain search runs the same matcher over every global plugin's items and
+the mode hints, and sorts them all together:
+
+1. Mode hints whose text names the mode outright (`pi`, `term`).
+2. Global items, by match quality. Ties go to plugins in discovery order,
+   then each plugin's own order. With empty text, each plugin's own order.
+3. Other mode hints.
+
+This keeps today's order (named modes, then apps, then other modes) while
+leaving room for more global plugins.
 
 ### Environment
 
@@ -388,6 +426,8 @@ pub trait Platform {
     fn spawn(&self, argv: &[String], cwd: Option<&Path>) -> io::Result<()>;
     /// Start argv in the user's terminal.
     fn terminal(&self, argv: &[String], cwd: Option<&Path>) -> io::Result<()>;
+    /// Launch an installed app by its platform id.
+    fn launch_app(&self, id: &str) -> io::Result<()>;
     /// Open a URL or path with its default handler.
     fn open(&self, target: &str) -> io::Result<()>;
     /// Put text on the clipboard.
@@ -403,6 +443,7 @@ pub trait Platform {
 |-----------------|---------|
 | `spawn`         | `setsid uwsm-app -- <argv>` |
 | `terminal`      | `setsid uwsm-app -- xdg-terminal-exec --dir=<cwd> <argv>` |
+| `launch_app`    | `setsid uwsm-app -- <id>` |
 | `open`          | `xdg-open` |
 | `copy`          | `wl-copy` |
 | `login_command` | `bash -lc 'exec "$@"' bash <argv>` |
@@ -417,9 +458,10 @@ them, so actions are tested without launching anything.
 Cargo.toml                 workspace
 crates/core/               quick-launcher-core: library + binary
 crates/plugin/             quick-launcher-plugin: SDK for Rust plugins
+plugins/apps/              bundled plugin: plugin.toml + Rust binary
 plugins/pi/                bundled plugin: plugin.toml + Rust binary
 plugins/terminal/          bundled plugin: plugin.toml + Rust binary
-ui/omarchy/                Omarchy shell plugin: manifest.json, Launcher.qml
+frontends/omarchy/         Omarchy shell plugin: manifest.json, Launcher.qml
 docs/protocol.md           this document
 install.py                 Omarchy installer: builds, copies, enables
 ```
@@ -429,11 +471,11 @@ install.py                 Omarchy installer: builds, copies, enables
 - The core's unit tests cover prefix parsing, hints, matching, ranking,
   action dispatch (through the recording `Platform`) and plugin process
   handling (through small test plugins).
-- An end-to-end test drives the real core binary over the UI protocol from a
-  script: hello, input, activate, close, with fixture plugins. It needs no
-  Omarchy, Hyprland or Quickshell, which is the check that the core stays
-  agnostic.
-- The QML UI is checked with `qmllint` and by hand on Omarchy.
+- An end-to-end test drives the real core binary over the frontend protocol
+  from a script: hello, input, activate, close, with fixture plugins. The
+  script is a second frontend that needs no Omarchy, Hyprland or Quickshell,
+  which is the check that the core assumes nothing about the Omarchy one.
+- The QML frontend is checked with `qmllint` and by hand on Omarchy.
 
 ## Rust plugin SDK (non-normative)
 
@@ -495,6 +537,7 @@ The bundled plugins, once ported:
 
 | plugin     | kind  | lifetime   | notes |
 |------------|-------|------------|-------|
+| `apps`     | list  | oneshot    | `global = true`; reads desktop entries, skips `NoDisplay`/`Hidden`, launches with `run.app` |
 | `pi`       | list  | oneshot    | `env = "login"`; pin/unpin via `plugin` actions |
 | `terminal` | list  | oneshot    | `query_item` runs the typed command; history items run it again, Shift+Enter forgets it |
 
@@ -504,6 +547,7 @@ The bundled plugins, once ported:
 |---|---|
 | modes run by `Launcher.qml` | plugins run by the core |
 | matching in `LauncherModel.js` | matching in the core |
+| apps searched by `Launcher.qml` through Omarchy's app library | bundled `apps` plugin, ranked by the core |
 | one `modes.json` entry per mode | one `plugin.toml` per plugin folder |
 | `list` argv | `exec` + `kind = "list"`, request on stdin |
 | row `action` | `actions[0]` with `run.exec` |
@@ -515,16 +559,17 @@ The switch happens in one step, not alongside v0. Running both would mean
 keeping the v0 loader and matcher in QML next to the core, which is exactly
 the logic the core exists to remove. Order of work:
 
-1. The core and SDK, tested with fixture plugins and the scripted UI test.
-2. `pi` and `terminal` ported to Rust plugins.
-3. `Launcher.qml` switched to the UI protocol. `modes.json`, `modes/*.py` and
-   `LauncherModel.js` are deleted in the same change.
+1. The core and SDK, tested with fixture plugins and the scripted frontend test.
+2. `apps`, `pi` and `terminal` written as Rust plugins.
+3. `Launcher.qml` switched to the frontend protocol, with its app search
+   removed. `modes.json`, `modes/*.py` and `LauncherModel.js` are deleted in
+   the same change.
 
 ## Open questions
 
-1. **Global search.** Should a plugin be able to show items in the plain
-   search (`global = true`), for example pinned pi projects next to apps?
-   The UI protocol already supports it through `placement`.
+1. **Omarchy app extras.** Launch feedback and uninstall came from Omarchy's
+   app library. Are they worth adding back, as `apps` actions or `Platform`
+   methods?
 2. **Prefix style.** `pi:` and `>` coexist today. Should prefixes follow one
    convention (`name:`), with symbols only as aliases?
 3. **Distribution.** Bundled plugins and the core are built by `cargo build`
