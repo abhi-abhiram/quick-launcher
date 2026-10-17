@@ -110,7 +110,7 @@ are given in parentheses as examples; another frontend picks its own.
 |--------------|--------|---------|
 | `hello`      | `client` (string), `client_version` (string), `max_items` (int, optional, default 50) | First message; its `v` is the major the frontend speaks. `client` and `client_version` name the frontend build, for logs only; the core MUST NOT behave differently because of them. `max_items` caps `items` in every `state`. The core replies `ready`. |
 | `open`       | `mode` (optional plugin id) | A session starts (window shown), optionally straight into a mode. The core resets to that mode (or none) with empty text, refreshes list plugins as needed, and sends `state`. |
-| `input`      | `seq` (int), `mode` (plugin id or `null`), `text` (string) | The typed text changed. `mode` is the mode of the newest `state` the frontend has drawn (`null` before the first), and `text` is all the text typed in that mode, without its prefix. `seq` increases with every `input`. See [Reading input as the user saw it](#reading-input-as-the-user-saw-it). |
+| `input`      | `seq` (int), `mode` (plugin id or `null`), `text` (string) | The typed text changed. `mode` is the mode the frontend is showing with its text (`null` before the first `state`), and `text` is all the text typed in that mode, without its prefix. `seq` increases with every `input`. See [Reading input as the user saw it](#reading-input-as-the-user-saw-it). |
 | `leave_mode` | — | Leave the active mode. The core puts the prefix the user typed to enter it (the mode's first prefix if it was entered another way), minus its last character, back into the text, as if the user had deleted the `:`. Does nothing without an active mode. (Backspace on empty text.) |
 | `complete`   | `item` (string, optional) | Enter a mode: the selected row's, when `item` is a [mode hint](#mode-hints)'s `ref`, otherwise the first mode hint's, if any. (Tab.) |
 | `activate`   | `item` (string), `action` (string) | Run an action. `item` is the item's `ref`, `action` an action `id`. (Enter, Shift+Enter, click, an action's `key`.) |
@@ -165,10 +165,21 @@ core's can briefly differ. Two rules keep them consistent:
   `mode: null`; both enter pi mode, and the second leaves text `l`. Typing
   right after `complete` or `leave_mode` works the same way: what the user
   typed is read against the screen they typed it on.
-- **The frontend doesn't take back stale text.** A frontend MUST NOT copy
-  `text` into its input from a `state` whose `seq` is lower than the last
-  `seq` it sent. It still draws that state's items, which the core
-  recomputes for its own newest text anyway.
+- **Mode and text change together, and never from a stale state.** A
+  `state` whose `seq` is lower than the last `seq` the frontend sent is
+  stale. The frontend draws its `items`, `loading` and `error`, but keeps
+  its own mode and text: it MUST NOT take either from a stale state, and it
+  takes both from a current one. The items are only briefly out of date,
+  since the core recomputes them for its own newest text anyway. A `state`
+  answering `leave_mode` or `complete` carries the last `seq` sent, so it
+  is current unless the user typed after it.
+
+  Taking the mode alone would break this. Sending `pi:` then `pi:l`, drawing
+  the first reply's mode `pi` while keeping the stale text `pi:l`, and then
+  typing `a` would send `mode: pi, text: "pi:la"`, reading the prefix as
+  search text. With the rule, the frontend still shows mode `null` and sends
+  `mode: null, text: "pi:la"`, which the core parses as mode `pi`, text
+  `la`.
 
 ### Frontend items
 
@@ -385,6 +396,9 @@ The SDK handles both; the lifetime is only a manifest setting.
 The core turns each item into a [frontend item](#frontend-items), with `ref`
 built from the plugin id and the item `id`. The `[query_item]` gets a `ref`
 of its own that no listed item can have, so it never collides with one.
+That `ref` also records the text the item was built from. Activating it
+runs the actions filled in with that text, which is what the user saw, even
+if newer input has changed the text in the meantime.
 
 ### Actions
 
@@ -517,9 +531,12 @@ an older SDK keeps working.
   plugin id.
 - A line MUST NOT exceed 4 MiB.
 - **`oneshot`**: the core writes the request line and then closes the
-  plugin's stdin. The SDK answers, reads EOF and exits. The core accepts the
-  response as soon as its line arrives, without waiting for the exit, then
-  reaps the process, killing it if it hasn't exited within `timeout_ms`.
+  plugin's stdin. The SDK answers, reads EOF and exits. The core uses each
+  response line as soon as it arrives, without waiting for the exit. Once
+  the final response (one without `more`) has arrived, the core reaps the
+  process, killing it if it hasn't exited within `timeout_ms`. Partial
+  responses don't start that deadline, so a one-shot plugin can stream
+  under the same between-responses timeout as a persistent one.
 - **`persistent`**: stdin stays open between requests. When the core exits
   it closes every persistent plugin's stdin, and the SDK exits at EOF.
 
