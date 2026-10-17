@@ -213,6 +213,9 @@ fn main() { quick_launcher_plugin::run(Pi) }
   way the core does.
 - Panics are caught and turned into an error response, so a bug in a
   persistent plugin costs one request, not a restart.
+- `query` gets a handle that can send partial results before the final
+  list, so slow answers (an AI reply, a network search) stream in, and that
+  reports when the core has cancelled the request because the text changed.
 - A plugin is built with plain `cargo build --release`; the binary and
   `plugin.toml` go in the plugin folder.
 
@@ -463,6 +466,7 @@ process) and `method`.
 | `list`     | `list` plugins             | `{}`                           |
 | `query`    | `query` plugins            | `{"text": "what was typed"}`   |
 | `activate` | any plugin, for a `plugin` action | `{"item": "<item id>", "action": "<action id>", "text": "..."}` |
+| `cancel`   | `persistent` plugins       | `{"request": <id>}`: stop work on that request; no response |
 
 ```json
 {"v":1,"id":7,"method":"query","params":{"text":"2*21"}}
@@ -489,9 +493,17 @@ Every response has `v` and echoes the request `id`.
 - `error` becomes the state's `error`, shown in place of the items. The
   message SHOULD be one short, user-readable sentence.
 
+A `query` response MAY set `"more": true`. It's a partial answer: the core
+replaces that request's items with it, sends a `state` with `loading: true`,
+and keeps waiting. The response without `more` is final. `timeout_ms`
+applies to the gap before each response, not to the whole stream.
+
 For a `persistent` plugin the core may send a new `query` before the previous
-one is answered. It uses only the response to the newest request and drops
-the rest, so the SDK answers in order without tracking cancellation.
+one is answered. It uses only responses to the newest request and drops the
+rest. It sends `cancel` for the superseded one (a superseded `oneshot`
+process is killed instead). A plugin that ignores
+`cancel` is still correct, only wasteful; one doing expensive work (calling
+a model, say) SHOULD stop.
 
 ## Platform
 
@@ -529,6 +541,32 @@ pub trait Platform {
 
 Core tests use a recording `Platform` that stores calls instead of running
 them, so actions are tested without launching anything.
+
+## Designed for later: AI
+
+AI integration isn't part of v1, but v1 is shaped so it can be added
+without breaking frontends or plugins:
+
+- **One catalog.** Everything launchable (apps, projects, commands) is an
+  item the core already holds, in one shape. An AI feature gets the whole
+  catalog from the core, never from a frontend.
+- **Actions are data.** An AI can only pick items and actions that plugins
+  offered, and the core runs them exactly as if the user had chosen them,
+  through `Platform` and never through a shell.
+- **Slow answers fit.** Partial `query` responses, `cancel` and per-plugin
+  `timeout_ms` let an AI plugin stream a reply, stop when the text changes,
+  and take longer than a list plugin.
+
+Expected additions, as new optional fields and requests that older
+frontends and plugins ignore:
+
+- A plugin request that reads the other plugins' items and actions, so an
+  AI plugin can see the catalog. Off unless the user grants it per plugin in
+  `config.toml`.
+- A way for a plugin to propose actions that run only after the user
+  confirms them in the frontend.
+- An optional long-text field on items for multi-line answers, drawn by
+  frontends that support it.
 
 ## Repository layout (non-normative)
 
