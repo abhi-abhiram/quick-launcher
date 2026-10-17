@@ -8,8 +8,9 @@ The keywords MUST, SHOULD and MAY are used as in RFC 2119.
 
 ## Goals
 
-- **Adding a plugin is dropping in a folder.** A manifest plus one executable,
-  in any language. No launcher changes, no rebuild, no shell restart.
+- **Adding a plugin is dropping in a folder.** A manifest plus one Rust
+  binary built with the plugin SDK. No core changes, no core rebuild, no
+  shell restart.
 - **Typing never waits on a process.** Most plugins list their items once and
   the core filters them. Plugins that must see every keystroke stay running,
   so there is no startup cost per keystroke.
@@ -20,9 +21,11 @@ The keywords MUST, SHOULD and MAY are used as in RFC 2119.
   The core never knows which one is connected.
 - **The core is platform-agnostic.** Omarchy is the only supported platform
   for now, but only one platform module inside the core knows that.
-- **Rust first.** The core, the bundled plugins and the plugin SDK are Rust.
-  Plugins only need to speak JSON over stdio, so a shell or Python plugin
-  still works.
+- **Rust only, for the core and every plugin.** Plugins are written against
+  the SDK's `Plugin` trait. How the SDK talks to the core is private to the
+  two, so it can change without breaking plugin code. Frontends are the
+  exception: they use whatever their toolkit needs (QML today), which is why
+  the frontend protocol is public JSON.
 
 ## Architecture
 
@@ -48,8 +51,8 @@ The keywords MUST, SHOULD and MAY are used as in RFC 2119.
   included), and runs actions through its platform module.
 - **Platform**: a module inside the core holding everything OS-specific. See
   [Platform](#platform).
-- **Plugin**: a folder with a `plugin.toml` manifest and an executable that
-  speaks the [plugin protocol](#plugin-protocol).
+- **Plugin**: a folder with a `plugin.toml` manifest and a Rust binary built
+  with the [plugin SDK](#plugin-sdk), running as its own process.
 
 ### Apps are a plugin
 
@@ -88,9 +91,10 @@ A frontend starts the core as a long-running child process and keeps it for
 as long as it wants results. The Omarchy shell plugin is `keepLoaded`, so it
 keeps the core for the life of the shell; a one-shot terminal client could
 start it per run. They exchange JSON Lines over the core's stdin and stdout;
-the core's stderr is the log. Any program that can start a process and read
-and write lines of JSON can be a frontend. Every message has `v` (protocol
-version) and `type`.
+the core's stderr is the log. Any program, in any language, that can start a
+process and read and write lines of JSON can be a frontend. Unlike the
+plugin wire format, this protocol is public and stable. Every message has
+`v` (protocol version) and `type`.
 
 Messages describe intent, not input devices. The Omarchy frontend's bindings
 are given in parentheses as examples; another frontend picks its own.
@@ -160,7 +164,57 @@ What a frontend needs to draw a row, with no knowledge of how actions run:
   or right-click, binds every `key`, and shows the selected row's other
   actions with their keys.
 
-## Plugin protocol
+## Plugins
+
+Plugins are Rust only. A plugin is a folder holding a `plugin.toml` manifest
+and one binary built with the `quick-launcher-plugin` crate. That crate's
+types and its `Plugin` trait are the plugin contract, together with the
+manifest and the item, action and environment rules below.
+
+Each plugin still runs as its own process, so a plugin that panics, hangs or
+leaks can't take the core down; the core times it out or restarts it. How
+the SDK and the core talk is the [wire format](#wire-format-internal), which
+is private to the two of them.
+
+### Plugin SDK
+
+The SDK handles the process side (reading requests, writing responses, the
+environment), so a plugin is only its own logic:
+
+```rust
+use quick_launcher_plugin::{Item, Action, Run, Activate, Outcome, Plugin};
+
+struct Pi;
+
+impl Plugin for Pi {
+    fn list(&mut self) -> anyhow::Result<Vec<Item>> {
+        Ok(projects()?.into_iter().map(|path| {
+            Item::new(&path, name(&path))
+                .detail(tilde(&path))
+                .action(Action::new("open", "Open pi").run(Run::terminal(["pi"]).cwd(&path)))
+                .action(Action::new("pin", "Pin").plugin().key("ctrl+p"))
+        }).collect())
+    }
+
+    fn activate(&mut self, a: Activate) -> anyhow::Result<Outcome> {
+        toggle_pin(&a.item)?;
+        Ok(Outcome::refresh())
+    }
+}
+
+fn main() { quick_launcher_plugin::run(Pi) }
+```
+
+- `run` reads requests until EOF, so the same binary works as `oneshot` or
+  `persistent`.
+- Methods a plugin doesn't need (`query` for a list plugin, `activate` for
+  one without `plugin` actions) have defaults that return an error.
+- The crate exports the core's matcher, so a `query` plugin ranks the same
+  way the core does.
+- Panics are caught and turned into an error response, so a bug in a
+  persistent plugin costs one request, not a restart.
+- A plugin is built with plain `cargo build --release`; the binary and
+  `plugin.toml` go in the plugin folder.
 
 ### Plugin discovery
 
@@ -189,15 +243,16 @@ it and the core logs a warning naming both.
 ### Manifest: `plugin.toml`
 
 ```toml
-protocol = 1                      # required; major protocol version
+protocol = 1                      # required; wire format major of the SDK
+                                  #   the binary was built with
 id = "pi"                         # required; [a-z0-9-]+, unique
 name = "pi"                       # required; shown in hints and the mode chip
 description = "Open pi in a project"
 icon = "π"                        # see Icons
 prefixes = ["pi:"]                # required; at least one, matched case-insensitively
 placeholder = "Open pi in…"       # shown in the empty search field
-exec = ["./pi-plugin"]            # required; argv, relative paths resolve
-                                  #   against the plugin folder
+bin = "pi-plugin"                 # required; the plugin's binary, in the
+                                  #   plugin folder
 kind = "list"                     # "list" (default) or "query"
 global = false                    # list plugins only: also searched in the
                                   #   plain search; see Kinds
@@ -233,62 +288,14 @@ Unknown keys MUST be ignored, so newer manifests load in older cores.
 
 ### Lifetimes
 
-- **`oneshot`**: the core starts the executable, writes one request line,
-  closes stdin, reads one response line and waits for it to exit. A plugin
-  that needs no input MAY ignore stdin entirely and just print its response.
-- **`persistent`**: the core starts the executable on first use and keeps it
-  running, writing one request per line and reading one response per line.
-  When the core exits it closes stdin, and the plugin MUST exit when stdin
-  reaches EOF.
+- **`oneshot`**: the core starts the binary for one request and waits for it
+  to exit. Best when the plugin's work is quick and its data changes between
+  opens.
+- **`persistent`**: the core starts the binary on first use and keeps it
+  running for later requests, so it can keep state and caches in memory.
+  When the core exits the plugin is told to stop, and it MUST exit.
 
-### Transport
-
-- JSON Lines over stdio: one UTF-8 JSON object per line, `\n` terminated.
-- stdin carries requests, stdout carries responses. A plugin MUST NOT write
-  anything else to stdout.
-- stderr is for logs. The core forwards it to its own log, prefixed with the
-  plugin id.
-- A line MUST NOT exceed 4 MiB.
-
-### Requests
-
-Every request has `v` (protocol version), `id` (an integer, unique per plugin
-process) and `method`.
-
-| method     | sent to                    | params                         |
-|------------|----------------------------|--------------------------------|
-| `list`     | `list` plugins             | `{}`                           |
-| `query`    | `query` plugins            | `{"text": "what was typed"}`   |
-| `activate` | any plugin, for a `plugin` action | `{"item": "<item id>", "action": "<action id>", "text": "..."}` |
-
-```json
-{"v":1,"id":7,"method":"query","params":{"text":"2*21"}}
-```
-
-`text` is what follows the prefix, with leading whitespace removed.
-
-### Responses
-
-Every response echoes the request `id`. A `oneshot` plugin MAY omit it.
-
-```json
-{"id":7,"items":[ ... ]}
-{"id":8,"result":{"close":true}}
-{"id":9,"error":{"message":"pinned.json is not valid JSON"}}
-```
-
-- `list` and `query` return `items`.
-- `activate` returns `result`:
-  - `close` (bool, default `true`): close the launcher.
-  - `refresh` (bool, default `false`): re-request the mode's items. Implies
-    the launcher stays open.
-  - `query` (string, optional): replace the typed text.
-- `error` becomes the state's `error`, shown in place of the items. The
-  message SHOULD be one short, user-readable sentence.
-
-For a `persistent` plugin the core may send a new `query` before the previous
-one is answered. It uses only the response to the newest request and drops
-the rest, so plugins MAY answer in order without tracking cancellation.
+The SDK handles both; the lifetime is only a manifest setting.
 
 ### Items
 
@@ -394,7 +401,8 @@ The core sets, for every plugin process:
 
 On Omarchy the last two are `$XDG_CONFIG_HOME/quick-launcher/<id>` and
 `$XDG_STATE_HOME/quick-launcher/<id>`. Plugins SHOULD use these variables
-rather than building paths themselves, so they stay portable.
+(the SDK exposes them as `quick_launcher_plugin::dirs()`) rather than building
+paths themselves, so they stay portable.
 
 With `env = "session"` the plugin inherits the core's environment, which is
 the fast path. With `env = "login"` the core starts it through the platform's
@@ -414,6 +422,76 @@ plugins that read variables set only in shell profiles (pi's
 - An unparsable response line is logged and treated as an error response.
 - Items missing `id`, `label` or `actions` are dropped and logged; the rest
   of the response is used.
+
+### Wire format (internal)
+
+This is how the SDK and the core talk, written down for whoever maintains the
+two. Plugins MUST NOT implement it themselves. The core and the SDK share
+their message types through one internal crate, so they can't drift apart,
+and they MAY change the format together in any release.
+
+It's JSON Lines because a plugin can be debugged by piping a request into it
+(`echo '{"v":1,"id":1,"method":"list","params":{}}' | ./pi-plugin`). Encoding
+cost doesn't matter here: a `list` response with a few thousand items parses
+in about a millisecond and is read once per mode entry, and a `query`
+response is a few KB. Starting the process and the plugin's own work cost
+far more. If JSON ever shows up in a profile, the encoding changes inside
+the core and the SDK, and plugins only need a rebuild.
+
+**Compatibility.** `protocol` in the manifest and `v` in every message are
+the wire format's major version. A plugin whose major differs from the
+core's is skipped, and the log asks for it to be rebuilt against the current
+SDK. Within a major, unknown fields MUST be ignored, so a plugin built with
+an older SDK keeps working.
+
+#### Transport
+
+- JSON Lines over stdio: one UTF-8 JSON object per line, `\n` terminated.
+- stdin carries requests, stdout carries responses. The SDK writes nothing
+  else to stdout, so plugins MUST NOT print to stdout themselves.
+- stderr is for logs. The core forwards it to its own log, prefixed with the
+  plugin id.
+- A line MUST NOT exceed 4 MiB.
+
+#### Requests
+
+Every request has `v` (protocol version), `id` (an integer, unique per plugin
+process) and `method`.
+
+| method     | sent to                    | params                         |
+|------------|----------------------------|--------------------------------|
+| `list`     | `list` plugins             | `{}`                           |
+| `query`    | `query` plugins            | `{"text": "what was typed"}`   |
+| `activate` | any plugin, for a `plugin` action | `{"item": "<item id>", "action": "<action id>", "text": "..."}` |
+
+```json
+{"v":1,"id":7,"method":"query","params":{"text":"2*21"}}
+```
+
+`text` is what follows the prefix, with leading whitespace removed.
+
+#### Responses
+
+Every response has `v` and echoes the request `id`.
+
+```json
+{"v":1,"id":7,"items":[ ... ]}
+{"v":1,"id":8,"result":{"close":true}}
+{"v":1,"id":9,"error":{"message":"pinned.json is not valid JSON"}}
+```
+
+- `list` and `query` return `items`.
+- `activate` returns `result`:
+  - `close` (bool, default `true`): close the launcher.
+  - `refresh` (bool, default `false`): re-request the mode's items. Implies
+    the launcher stays open.
+  - `query` (string, optional): replace the typed text.
+- `error` becomes the state's `error`, shown in place of the items. The
+  message SHOULD be one short, user-readable sentence.
+
+For a `persistent` plugin the core may send a new `query` before the previous
+one is answered. It uses only the response to the newest request and drops
+the rest, so the SDK answers in order without tracking cancellation.
 
 ## Platform
 
@@ -457,7 +535,8 @@ them, so actions are tested without launching anything.
 ```
 Cargo.toml                 workspace
 crates/core/               quick-launcher-core: library + binary
-crates/plugin/             quick-launcher-plugin: SDK for Rust plugins
+crates/plugin/             quick-launcher-plugin: the plugin SDK
+crates/wire/               wire format types shared by core and SDK (internal)
 plugins/apps/              bundled plugin: plugin.toml + Rust binary
 plugins/pi/                bundled plugin: plugin.toml + Rust binary
 plugins/terminal/          bundled plugin: plugin.toml + Rust binary
@@ -470,49 +549,18 @@ install.py                 Omarchy installer: builds, copies, enables
 
 - The core's unit tests cover prefix parsing, hints, matching, ranking,
   action dispatch (through the recording `Platform`) and plugin process
-  handling (through small test plugins).
+  handling (through fixture plugins built with the SDK).
+- The SDK's tests cover its request loop, panic handling and defaults
+  against the shared wire types.
 - An end-to-end test drives the real core binary over the frontend protocol
   from a script: hello, input, activate, close, with fixture plugins. The
   script is a second frontend that needs no Omarchy, Hyprland or Quickshell,
   which is the check that the core assumes nothing about the Omarchy one.
 - The QML frontend is checked with `qmllint` and by hand on Omarchy.
 
-## Rust plugin SDK (non-normative)
-
-A `quick-launcher-plugin` crate in this repo handles the transport, so a
-plugin is mostly its own logic:
-
-```rust
-use quick_launcher_plugin::{Item, Action, Run, Activate, Outcome, Plugin};
-
-struct Pi;
-
-impl Plugin for Pi {
-    fn list(&mut self) -> anyhow::Result<Vec<Item>> {
-        Ok(projects()?.into_iter().map(|path| {
-            Item::new(&path, name(&path))
-                .detail(tilde(&path))
-                .action(Action::new("open", "Open pi").run(Run::terminal(["pi"]).cwd(&path)))
-                .action(Action::new("pin", "Pin").plugin().key("ctrl+p"))
-        }).collect())
-    }
-
-    fn activate(&mut self, a: Activate) -> anyhow::Result<Outcome> {
-        toggle_pin(&a.item)?;
-        Ok(Outcome::refresh())
-    }
-}
-
-fn main() { quick_launcher_plugin::run(Pi) }
-```
-
-`run` reads requests until EOF, so the same binary works as `oneshot` or
-`persistent`. The crate also exports the core's matcher, so a `query` plugin
-ranks the same way the core does.
-
 ## Examples
 
-A complete plugin in shell, listing git repos under `~/Projects`:
+A complete plugin listing git repos under `~/Projects`:
 
 ```toml
 # ~/.config/quick-launcher/plugins/repos/plugin.toml
@@ -521,16 +569,36 @@ id = "repos"
 name = "Repos"
 icon = ""
 prefixes = ["repo:"]
-exec = ["./list.sh"]
+bin = "repos"
 ```
 
-```sh
-#!/bin/sh
-# list.sh: oneshot list plugin; ignores stdin.
-find ~/Projects -maxdepth 2 -name .git -printf '%h\n' | jq -Rnc '{items: [inputs | {
-  id: ., label: (split("/") | last), detail: .,
-  actions: [{title: "Open in VS Code", run: {exec: ["code", .]}}]
-}]}'
+```rust
+// src/main.rs; `cargo build --release`, then copy target/release/repos
+// into the plugin folder.
+use quick_launcher_plugin::{Action, Item, Plugin, Run};
+use std::{env, fs, path::PathBuf};
+
+struct Repos;
+
+impl Plugin for Repos {
+    fn list(&mut self) -> anyhow::Result<Vec<Item>> {
+        let root = PathBuf::from(env::var("HOME")?).join("Projects");
+        Ok(fs::read_dir(root)?
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.join(".git").is_dir())
+            .map(|path| {
+                let dir = path.display().to_string();
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                Item::new(&dir, name)
+                    .detail(&dir)
+                    .action(Action::new("open", "Open in VS Code").run(Run::exec(["code", &dir])))
+            })
+            .collect())
+    }
+}
+
+fn main() { quick_launcher_plugin::run(Repos) }
 ```
 
 The bundled plugins, once ported:
@@ -549,7 +617,7 @@ The bundled plugins, once ported:
 | matching in `LauncherModel.js` | matching in the core |
 | apps searched by `Launcher.qml` through Omarchy's app library | bundled `apps` plugin, ranked by the core |
 | one `modes.json` entry per mode | one `plugin.toml` per plugin folder |
-| `list` argv | `exec` + `kind = "list"`, request on stdin |
+| `list` argv, any language | Rust binary built with the SDK, `bin` + `kind = "list"` |
 | row `action` | `actions[0]` with `run.exec` |
 | row `secondary` | `actions[1]`, usually `run.plugin` with `after = "refresh"` |
 | `query` row template | `[query_item]` |
@@ -573,5 +641,6 @@ the logic the core exists to remove. Order of work:
 2. **Prefix style.** `pi:` and `>` coexist today. Should prefixes follow one
    convention (`name:`), with symbols only as aliases?
 3. **Distribution.** Bundled plugins and the core are built by `cargo build`
-   at install time. Is requiring a Rust toolchain to install acceptable, or
-   should releases include prebuilt binaries?
+   at install time. Writing a plugin needs a Rust toolchain anyway, but is
+   it acceptable just to install, or should releases include prebuilt
+   binaries?
