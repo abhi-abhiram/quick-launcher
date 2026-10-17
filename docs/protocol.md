@@ -2,7 +2,8 @@
 
 Status: **draft for review**. Nothing here is implemented yet. It replaces the
 `modes.json` contract described in the README ("v0"); the switch happens in
-one step, see [Migrating from v0](#migrating-from-v0).
+one step, see [Migrating from v0](#migrating-from-v0). The implementation
+plan is in [milestones.md](milestones.md).
 
 The keywords MUST, SHOULD and MAY are used as in RFC 2119.
 
@@ -691,7 +692,8 @@ frontends and plugins ignore:
 Cargo.toml                 workspace
 crates/core/               quick-launcher-core: library + binary
 crates/plugin/             quick-launcher-plugin: the plugin SDK
-crates/wire/               wire format types shared by core and SDK (internal)
+crates/wire/               wire format types and the matcher, shared by core
+                           and SDK (internal)
 plugins/apps/              bundled plugin: plugin.toml + Rust binary
 plugins/pi/                bundled plugin: plugin.toml + Rust binary
 plugins/terminal/          bundled plugin: plugin.toml + Rust binary
@@ -738,9 +740,11 @@ wherever it lives.
 - The SDK's tests cover its request loop, panic handling and defaults
   against the shared wire types.
 - An end-to-end test drives the real core binary over the frontend protocol
-  from a script: hello, input, activate, close, with fixture plugins. The
-  script is a second frontend that needs no Omarchy, Hyprland or Quickshell,
-  which is the check that the core assumes nothing about the Omarchy one.
+  from a script: hello, input, activate, close, with fixture plugins and
+  the recording `Platform` (compiled in only by a test-only build feature,
+  so nothing launches). The script is a second frontend that needs no
+  Omarchy, Hyprland or Quickshell, which is the check that the core assumes
+  nothing about the Omarchy one.
 - The QML frontend is checked with `qmllint` and by hand on Omarchy.
 
 ## Examples
