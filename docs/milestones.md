@@ -78,9 +78,11 @@ be changed then.
 
 - **Rust edition 2024**, one Cargo workspace. `cargo fmt --check`,
   `cargo clippy --all-targets -- -D warnings` and `cargo test` pass on every
-  PR, checked by a GitHub Actions workflow added in M1. The v0 test commands
-  in the README run in the same workflow and keep passing until M15 deletes
-  v0.
+  PR. `python3 tools/check.py`, added in M1, runs them along with the v0 test
+  commands from the README, which keep passing until M15 deletes v0. Run it
+  before pushing. A GitHub Actions workflow runs the same commands, but only
+  when started by hand (`workflow_dispatch`), since the repository has no
+  Actions minutes; switch it to `push` and `pull_request` once it does.
 - **Crates**: `serde` + `serde_json` for JSON, `toml` for manifests and
   config. The SDK's API uses `anyhow::Result`, as the spec's examples do.
 - **The matcher lives in the wire crate** (`quick_launcher_wire::matcher`),
@@ -126,9 +128,10 @@ defined once and tested against every JSON example in the spec.
 - Root `Cargo.toml` workspace with `crates/wire`, plus empty `crates/core`
   and `crates/plugin` so later PRs only add code. `.gitignore` covers
   `target/`.
-- `.github/workflows/ci.yml`: on every push and PR, runs `cargo fmt
-  --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and
-  the v0 tests (`python3 -m unittest`, `node --test`).
+- `tools/check.py`: runs `cargo fmt --check`, `cargo clippy --all-targets
+  -- -D warnings`, `cargo test`, and the v0 tests (`python3 -m unittest`,
+  `node --test`). `.github/workflows/ci.yml` runs the same commands when
+  started by hand.
 - `quick-launcher-wire`: `PROTOCOL` (= 1), `Request` (`list`, `query`,
   `activate`, `cancel`), `Response` (`items`, `result`, `error`, `more`),
   `Item`, `Action`, `Run` (the six forms), `After`, `Icon` (string or
@@ -147,7 +150,7 @@ validation beyond what serde does (M7).
 - An `Icon` string parses as a glyph regardless of length.
 - A `Run` with two forms, or none, is rejected.
 - A line over 4 MiB is an error, not an allocation.
-- The CI workflow passes on this PR.
+- `python3 tools/check.py` passes on this PR.
 
 ### M2 — Matcher
 
@@ -198,7 +201,8 @@ Branch `feat/plugin-sdk`.
   background thread).
 - `dirs()` reads `QL_CONFIG_DIR` / `QL_STATE_DIR` and creates them on first
   use. Re-exports the matcher.
-- `examples/repos.rs`: the spec's *Examples* plugin, compiled in CI.
+- `examples/repos.rs`: the spec's *Examples* plugin, compiled by `cargo test`
+  (and so by `tools/check.py`).
 
 **Done when**
 

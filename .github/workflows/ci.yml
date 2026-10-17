@@ -1,8 +1,10 @@
 name: CI
 
+# Manual only: the repository has no Actions minutes. Run
+# `python3 tools/check.py` locally instead; switch back to `push` and
+# `pull_request` once minutes are available.
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read

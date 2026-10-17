@@ -106,6 +106,10 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
+`python3 tools/check.py` runs all of the above, v0's tests included. Run it
+before pushing: the GitHub Actions workflow runs the same checks but only
+when started by hand.
+
 Tests use temporary directories and never launch a terminal or touch your
 desktop. To try an installer change without touching your config, use
 `python3 install.py --config-home /path/to/config --no-reload`.
