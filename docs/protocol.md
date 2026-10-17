@@ -149,7 +149,7 @@ know.
 |-----------|---------|
 | `seq`     | The newest `input` the core has applied. |
 | `mode`    | The active mode, or `null` for the plain search. |
-| `text`    | The typed text. Differs from what the frontend sent when the core changed mode, e.g. typing `pi:launch` gives mode `pi` and text `launch`. |
+| `text`    | The typed text, as typed, after the prefix. Differs from what the frontend sent when the core changed mode, e.g. typing `pi:launch` gives mode `pi` and text `launch` (whitespace right after a prefix is dropped). See [The query](#the-query). |
 | `loading` | A plugin request for this mode and text is still outstanding. |
 | `error`   | A one-line, user-readable message, or `null`. Drawn alongside `items`, never instead of them. |
 | `items`   | Items to show, best first, at most `max_items`. This is the whole list, apps and mode hints included; the frontend adds nothing to it. |
@@ -181,6 +181,15 @@ core's can briefly differ. Two rules keep them consistent:
   `mode: null, text: "pi:la"`, which the core parses as mode `pi`, text
   `la`.
 
+### The query
+
+The **query** is `state.text` with leading and trailing whitespace removed.
+It's the one string everything else uses: the core filters on it, mode
+hints match against it, `query` and `activate` requests carry it to
+plugins as `text`, and `{query}` in a `[query_item]` becomes it. `state.text`
+itself keeps trailing whitespace, so the frontend's field doesn't jump
+while the user types a space.
+
 ### Frontend items
 
 What a frontend needs to draw a row, with no knowledge of how actions run:
@@ -205,10 +214,21 @@ What a frontend needs to draw a row, with no knowledge of how actions run:
 
 ### Mode hints
 
-In the plain search the core adds an item for each mode whose name or
-prefix matches the text (ranked as in
-[Filtering and ranking](#filtering-and-ranking)). It's an ordinary item to
-the frontend, with one action, `{"id": "enter", "title": "Open <name>"}`.
+In the plain search, when the [query](#the-query) is not empty, the core
+adds an item for each mode whose name or one of whose prefixes starts with
+the query, ignoring case (ranked as in
+[Filtering and ranking](#filtering-and-ranking)). With an empty query there
+are no hints, as in v0. A hint is an ordinary item to the frontend and
+counts toward `max_items`:
+
+| field     | value |
+|-----------|-------|
+| `ref`     | made by the core; never equal to a plugin item's |
+| `label`   | the mode's `name` |
+| `detail`  | its prefixes, then ` · `, then its `description` |
+| `icon`    | the mode's icon |
+| `actions` | one: `{"id": "enter", "title": "Open <name>"}` |
+
 Activating it enters that mode with empty text, as `complete` would, and
 sends `state` rather than `done`. So a frontend that draws items generically
 can enter any mode by selection, with no special case for hints.
@@ -322,7 +342,7 @@ timeout_ms = 2000                 # per request; default 2000
 
 # Optional: an item built from the typed text, shown first. Only for
 # kind = "list". `{query}` is replaced in every string, including argv,
-# with the typed text trimmed. Not shown when that text is empty, or when
+# with the query (see The query). Not shown when the query is empty, or when
 # an item still in the filtered list has exactly that label (so a command
 # already in terminal history appears once).
 # It has no `id`: its `plugin` actions are sent with `item` set to null
@@ -556,7 +576,8 @@ process) and `method`.
 {"v":1,"id":7,"method":"query","params":{"text":"2*21"}}
 ```
 
-`text` is what follows the prefix, with leading whitespace removed.
+`text` is the [query](#the-query): what follows the prefix, with leading and
+trailing whitespace removed.
 
 #### Responses
 
@@ -797,9 +818,12 @@ folders:
 | terminal history | `$XDG_STATE_HOME/quick-launcher/terminal-history.json` | `QL_STATE_DIR` (`$XDG_STATE_HOME/quick-launcher/terminal/`) |
 
 Each plugin reads its v0 file while its own file doesn't exist yet, and
-writes only to its own, the way `modes/pi.py` already reads pins left by the
-older pi-launcher widget (`pi` keeps that fallback too, after the v0 file).
-v0 files are never changed, so going back to v0 loses nothing.
+writes only to its own. Its first write carries the v0 contents forward
+(read, change, write the whole result), so the first pin or command added
+after the upgrade doesn't replace what was there. This is how `modes/pi.py`
+already handles pins left by the older pi-launcher widget (`pi` keeps that
+fallback too, after the v0 file). v0 files are never changed, so going back
+to v0 loses nothing.
 
 ## Open questions
 
