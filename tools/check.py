@@ -2,7 +2,7 @@
 """Run every check a PR must pass: the Rust workspace's and v0's.
 
 Run it before pushing. The CI workflow runs the same commands on every
-push and PR.
+PR and every push to main.
 """
 
 import subprocess

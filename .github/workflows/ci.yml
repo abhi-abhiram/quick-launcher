@@ -4,8 +4,14 @@ name: CI
 # tools/check.py` runs the same checks locally.
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+
+# A newer commit on the same branch or PR cancels the run it supersedes.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
