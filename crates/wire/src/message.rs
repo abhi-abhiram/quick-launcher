@@ -2,11 +2,19 @@
 //! *Responses* in `docs/protocol.md`).
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
+use crate::one_of::exactly_one;
 use crate::{Item, PROTOCOL};
 
 /// A request from the core: `{"v":1,"id":7,"method":"query","params":{…}}`.
+///
+/// The core always sends `params`, but a missing or `null` `params` reads
+/// as `{}`, so a request piped in by hand can leave it out
+/// (`{"v":1,"id":1,"method":"list"}`). Methods with required params still
+/// need them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "RequestFields")]
 pub struct Request {
     /// The wire format major the sender speaks.
     pub v: u32,
@@ -24,6 +32,32 @@ impl Request {
             id,
             method,
         }
+    }
+}
+
+/// A request as read, before its `params` are checked against its `method`.
+#[derive(Deserialize)]
+struct RequestFields {
+    v: u32,
+    id: u64,
+    method: String,
+    #[serde(default)]
+    params: Option<Value>,
+}
+
+impl TryFrom<RequestFields> for Request {
+    type Error = serde_json::Error;
+
+    fn try_from(f: RequestFields) -> Result<Self, Self::Error> {
+        let params = f
+            .params
+            .unwrap_or_else(|| Value::Object(Default::default()));
+        let method = serde_json::from_value(json!({"method": f.method, "params": params}))?;
+        Ok(Request {
+            v: f.v,
+            id: f.id,
+            method,
+        })
     }
 }
 
@@ -132,20 +166,17 @@ struct ResponseFields {
 }
 
 impl TryFrom<ResponseFields> for Response {
-    type Error = &'static str;
+    type Error = String;
 
     fn try_from(f: ResponseFields) -> Result<Self, Self::Error> {
         let mut bodies = Vec::new();
         bodies.extend(f.items.map(ResponseBody::Items));
         bodies.extend(f.result.map(ResponseBody::Result));
         bodies.extend(f.error.map(ResponseBody::Error));
-        if bodies.len() != 1 {
-            return Err("response must have exactly one of items, result or error");
-        }
         Ok(Response {
             v: f.v,
             id: f.id,
-            body: bodies.remove(0),
+            body: exactly_one(bodies, "response", "items, result or error")?,
             more: f.more,
         })
     }

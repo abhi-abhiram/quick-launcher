@@ -2,14 +2,16 @@
 //! icons never guessed from length, one `run` form per action, and bounded
 //! lines.
 
+use std::fmt::Debug;
 use std::io::{BufReader, Cursor, Read};
 
 use quick_launcher_wire::framing::{self, FrameError, MAX_LINE};
 use quick_launcher_wire::{
-    Action, ActivateResult, After, Icon, Item, Method, PROTOCOL, Request, Response, ResponseBody,
-    Run,
+    Action, ActivateResult, After, Icon, Item, Method, PROTOCOL, QueryParams, Request, Response,
+    ResponseBody, Run,
 };
-use serde_json::json;
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
 
 #[test]
 fn unknown_fields_are_ignored() {
@@ -108,13 +110,6 @@ fn required_fields_are_required() {
             .is_err()
     );
     assert!(serde_json::from_value::<Response>(json!({"v": 1, "id": 1})).is_err());
-    assert!(
-        serde_json::from_value::<Response>(json!({
-            "v": 1, "id": 1, "items": [], "error": {"message": "m"}
-        }))
-        .is_err(),
-        "a response with two bodies is ambiguous"
-    );
 }
 
 #[test]
@@ -132,34 +127,95 @@ fn icon_strings_are_glyphs_regardless_of_length() {
     }
 }
 
+/// The error message for parsing `value` as `T`, which must fail.
+fn error<T: DeserializeOwned + Debug>(value: &Value) -> String {
+    serde_json::from_value::<T>(value.clone())
+        .expect_err(&value.to_string())
+        .to_string()
+}
+
 #[test]
 fn icon_objects_need_exactly_one_form() {
+    for icon in [json!({}), json!({"size": 16})] {
+        assert!(
+            error::<Icon>(&icon).contains("icon object needs one of"),
+            "{icon}"
+        );
+    }
     for icon in [
-        json!({}),
-        json!({"size": 16}),
         json!({"name": "folder", "path": "/a.svg"}),
         json!({"glyph": "x", "name": "folder"}),
-        json!(3),
     ] {
         assert!(
-            serde_json::from_value::<Icon>(icon.clone()).is_err(),
+            error::<Icon>(&icon).contains("icon object must have only one of"),
             "{icon}"
+        );
+    }
+    assert!(error::<Icon>(&json!(3)).contains("icon must be a string or"));
+}
+
+#[test]
+fn run_needs_exactly_one_form() {
+    for run in [json!({}), json!({"cwd": "/p"})] {
+        assert!(error::<Run>(&run).contains("run needs one of"), "{run}");
+    }
+    for run in [
+        json!({"exec": ["a"], "terminal": ["a"]}),
+        json!({"app": "a.desktop", "open": "/p"}),
+        json!({"copy": "x", "plugin": "pin"}),
+    ] {
+        assert!(
+            error::<Run>(&run).contains("run must have only one of"),
+            "{run}"
         );
     }
 }
 
 #[test]
-fn run_needs_exactly_one_form() {
-    for run in [
-        json!({}),
-        json!({"cwd": "/p"}),
-        json!({"exec": ["a"], "terminal": ["a"]}),
-        json!({"app": "a.desktop", "open": "/p"}),
-        json!({"copy": "x", "plugin": "pin"}),
-    ] {
-        let err = serde_json::from_value::<Run>(run.clone()).unwrap_err();
-        assert!(err.to_string().contains("run"), "{run}: {err}");
+fn response_needs_exactly_one_body() {
+    let none = error::<Response>(&json!({"v": 1, "id": 1, "data": []}));
+    assert!(
+        none.contains("response needs one of items, result or error"),
+        "{none}"
+    );
+    let several = error::<Response>(&json!({
+        "v": 1, "id": 1, "items": [], "error": {"message": "m"}
+    }));
+    assert!(
+        several.contains("response must have only one of items, result or error"),
+        "{several}"
+    );
+}
+
+#[test]
+fn missing_params_read_as_empty() {
+    for params in [None, Some(Value::Null)] {
+        let mut request = json!({"v": 1, "id": 1, "method": "list"});
+        let mut query = json!({"v": 1, "id": 2, "method": "query"});
+        if let Some(params) = &params {
+            request["params"] = params.clone();
+            query["params"] = params.clone();
+        }
+        let request: Request = serde_json::from_value(request).unwrap();
+        assert_eq!(request, Request::new(1, Method::list()));
+        let query: Request = serde_json::from_value(query).unwrap();
+        assert_eq!(query.method, Method::Query(QueryParams { text: "".into() }));
     }
+
+    // Params a method needs are still needed.
+    for method in ["activate", "cancel"] {
+        let request = json!({"v": 1, "id": 1, "method": method});
+        assert!(
+            error::<Request>(&request).contains("missing field"),
+            "{method}"
+        );
+    }
+
+    // And a request is still written with its params.
+    assert_eq!(
+        serde_json::to_value(Request::new(1, Method::list())).unwrap(),
+        json!({"v": 1, "id": 1, "method": "list", "params": {}})
+    );
 }
 
 #[test]

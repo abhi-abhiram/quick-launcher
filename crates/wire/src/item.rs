@@ -4,6 +4,8 @@
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::one_of::exactly_one;
+
 /// One result a plugin offers.
 ///
 /// `id`, `label` and `actions` are required. Dropping an item that lacks them
@@ -169,15 +171,8 @@ impl<'de> Deserialize<'de> for Run {
         forms.extend(f.open.map(Run::Open));
         forms.extend(f.copy.map(Run::Copy));
         forms.extend(f.plugin.map(Run::Plugin));
-        match forms.len() {
-            1 => Ok(forms.remove(0)),
-            0 => Err(D::Error::custom(
-                "run needs one of exec, terminal, app, open, copy or plugin",
-            )),
-            _ => Err(D::Error::custom(
-                "run must have exactly one of exec, terminal, app, open, copy or plugin",
-            )),
-        }
+        exactly_one(forms, "run", "exec, terminal, app, open, copy or plugin")
+            .map_err(D::Error::custom)
     }
 }
 
@@ -222,12 +217,6 @@ impl<'de> Deserialize<'de> for Icon {
         forms.extend(f.glyph.map(Icon::Glyph));
         forms.extend(f.name.map(Icon::Name));
         forms.extend(f.path.map(Icon::Path));
-        if forms.len() == 1 {
-            Ok(forms.remove(0))
-        } else {
-            Err(D::Error::custom(
-                "icon object must have exactly one of glyph, name or path",
-            ))
-        }
+        exactly_one(forms, "icon object", "glyph, name or path").map_err(D::Error::custom)
     }
 }
