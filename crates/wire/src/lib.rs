@@ -1,12 +1,14 @@
 //! The wire format between the quick launcher core and plugins built with the
 //! SDK. It is private to the two of them (see *Wire format* in
-//! `docs/protocol.md`), so plugins never use this crate directly.
+//! `docs/protocol.md`), so plugins never use this crate directly. It also holds
+//! the [`matcher`], which the SDK re-exports.
 //!
 //! Every type ignores fields it doesn't know and fills missing optional fields
 //! with their defaults, so a plugin built with an older SDK keeps working.
 
 pub mod framing;
 mod item;
+pub mod matcher;
 mod message;
 mod one_of;
 
