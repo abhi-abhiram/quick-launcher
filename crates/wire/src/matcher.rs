@@ -16,9 +16,12 @@ pub type TextScore = u32;
 /// Every whitespace-separated term of the query must appear in `text` as a
 /// substring or, failing that, as an in-order subsequence.
 pub fn score(text: &str, query: &str) -> Option<TextScore> {
-    let name = text.to_lowercase();
     let needle = query.trim().to_lowercase();
-    if needle.is_empty() || name == needle {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    let name = text.to_lowercase();
+    if name == needle {
         return Some(0);
     }
     if name.starts_with(&needle) {
@@ -33,28 +36,25 @@ pub fn score(text: &str, query: &str) -> Option<TextScore> {
         if name.contains(term) {
             continue;
         }
-        let (first, last, len) = subsequence(&chars, term)?;
-        // A tighter subsequence spans fewer characters beyond the term's own.
-        total += 10 + (last - first + 1 - len) as TextScore;
+        total += 10 + subsequence_gaps(&chars, term)? as TextScore;
     }
     Some(total)
 }
 
-/// The first and last positions of `term`'s characters found in order in
-/// `chars`, and how many there are, or `None` when they aren't all there.
-fn subsequence(chars: &[char], term: &str) -> Option<(usize, usize, usize)> {
+/// Finds `term`'s characters in order in `chars`, each as early as possible,
+/// and counts the characters skipped between them, or `None` when they aren't
+/// all there. A tighter subsequence skips fewer.
+fn subsequence_gaps(chars: &[char], term: &str) -> Option<usize> {
     let mut cursor = 0;
-    let mut first = None;
-    let mut last = 0;
-    let mut len = 0;
-    for c in term.chars() {
+    let mut gaps = 0;
+    for (i, c) in term.chars().enumerate() {
         let found = cursor + chars[cursor..].iter().position(|&x| x == c)?;
-        first.get_or_insert(found);
-        last = found;
+        if i > 0 {
+            gaps += found - cursor;
+        }
         cursor = found + 1;
-        len += 1;
     }
-    Some((first?, last, len))
+    Some(gaps)
 }
 
 /// Which field of an item a query matched.
@@ -152,8 +152,8 @@ pub fn filter<T: Searchable>(items: &[T], query: &str) -> Vec<Match> {
 /// surrounding whitespace. An empty query starts nothing, so it brings up no
 /// mode hints.
 pub fn starts_with(text: &str, query: &str) -> bool {
-    let query = query.trim().to_lowercase();
-    !query.is_empty() && text.to_lowercase().starts_with(&query)
+    let query = query.trim();
+    !query.is_empty() && text.to_lowercase().starts_with(&query.to_lowercase())
 }
 
 /// Whether `query` names a mode outright: it is the mode's name, or one of
