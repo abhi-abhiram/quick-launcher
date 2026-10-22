@@ -26,6 +26,10 @@ pub struct Item(wire::Item);
 impl Item {
     /// An item with no actions yet. `id` must be stable within the plugin: it
     /// comes back in [`Activate::item`](crate::Activate::item).
+    ///
+    /// Add at least one [`action`](Item::action): the core drops an item
+    /// without one. Debug builds of a plugin fail the request instead, so
+    /// the mistake shows.
     pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
         Item(wire::Item {
             id: id.into(),
@@ -88,6 +92,11 @@ impl Item {
     }
 
     pub(crate) fn into_wire(self) -> wire::Item {
+        debug_assert!(
+            !self.0.actions.is_empty(),
+            "item {:?} has no actions, so the core would drop it",
+            self.0.id
+        );
         self.0
     }
 }

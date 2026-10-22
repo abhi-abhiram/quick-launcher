@@ -299,3 +299,47 @@ fn an_answer_too_large_to_send_becomes_an_error() {
     assert!(response["error"]["message"].is_string(), "{response}");
     plugin.finish();
 }
+
+#[test]
+fn a_read_error_is_returned_after_answering_what_was_read() {
+    /// One request, then a failing read, as a broken stdin gives.
+    struct Broken(io::Cursor<Vec<u8>>);
+    impl io::Read for Broken {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            match self.0.read(buf)? {
+                0 => Err(io::Error::new(io::ErrorKind::BrokenPipe, "stdin broke")),
+                n => Ok(n),
+            }
+        }
+    }
+
+    let input = Broken(io::Cursor::new(format!("{}\n", list(1)).into_bytes()));
+    let (output, writer) = io::pipe().unwrap();
+    let error = run_on(Notes, input, writer).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+    let mut output = BufReader::new(output);
+    let mut buf = Vec::new();
+    let response: Value = framing::read_message(&mut output, &mut buf)
+        .unwrap()
+        .unwrap();
+    assert_eq!(labels(&response), ["todo", "ideas"]);
+}
+
+#[cfg(debug_assertions)]
+#[test]
+fn an_item_without_actions_fails_the_request_in_debug_builds() {
+    struct Bare;
+    impl Plugin for Bare {
+        fn list(&mut self) -> anyhow::Result<Vec<Item>> {
+            Ok(vec![Item::new("bare", "Bare")])
+        }
+    }
+
+    let mut plugin = start(Bare);
+    let message = plugin.ask(list(1))["error"]["message"].clone();
+    assert!(
+        message.as_str().unwrap().contains("has no actions"),
+        "{message}"
+    );
+    plugin.finish();
+}

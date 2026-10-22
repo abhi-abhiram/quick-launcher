@@ -111,6 +111,9 @@ impl Query {
     /// Sends `items` as a partial answer, which replaces any sent before. The
     /// list `query` returns is the final one. Use it so a slow answer (an AI
     /// reply, a network search) shows while it's still coming.
+    ///
+    /// Fails if the answer can't be sent, for example because it encodes to
+    /// more than 4 MiB. Returning that error ends the query with it.
     pub fn partial(&self, items: Vec<Item>) -> anyhow::Result<()> {
         let mut response = Response::new(self.id, items_body(items));
         response.more = true;
@@ -131,7 +134,8 @@ impl Query {
 /// a `persistent` one.
 ///
 /// Only protocol lines go to stdout, so the plugin itself must not print
-/// there; stderr is for logs. Exits with status 1 if stdout can't be written.
+/// there; stderr is for logs. Exits with status 1 if stdin can't be read or
+/// stdout can't be written.
 pub fn run<P: Plugin>(plugin: P) {
     if let Err(e) = run_on(plugin, io::stdin(), io::stdout()) {
         eprintln!("quick-launcher-plugin: {e}");
@@ -140,7 +144,8 @@ pub fn run<P: Plugin>(plugin: P) {
 }
 
 /// [`run`] over any input and output, such as pipes in a test. Returns at
-/// the end of `input`, or with the error if `output` fails.
+/// the end of `input`, or with the error if reading `input` or writing
+/// `output` fails.
 pub fn run_on<P, R, W>(mut plugin: P, input: R, output: W) -> io::Result<()>
 where
     P: Plugin,
@@ -150,10 +155,10 @@ where
     let out = Output(Arc::new(Mutex::new(Box::new(output))));
     let running: Running = Arc::default();
     let (requests, received) = mpsc::channel();
-    {
+    let reader = {
         let (out, running) = (out.clone(), running.clone());
-        thread::spawn(move || read_requests(input, requests, out, running));
-    }
+        thread::spawn(move || read_requests(input, requests, out, running))
+    };
     for (request, cancelled) in received {
         let id = request.id;
         let body = answer(&mut plugin, request.method, id, cancelled, &out);
@@ -164,11 +169,14 @@ where
             Err(e) => {
                 let message = format!("the plugin's answer can't be sent: {e}");
                 out.send(&Response::new(id, error_body(message)))
-                    .map_err(io::Error::other)?;
+                    .map_err(into_io)?;
             }
         }
     }
-    Ok(())
+    // The reader has finished: it dropped its end of the channel.
+    reader
+        .join()
+        .unwrap_or_else(|_| Err(io::Error::other("the request reader panicked")))
 }
 
 /// Each request read but not yet answered, by id, with its cancel flag.
@@ -177,22 +185,23 @@ type Running = Arc<Mutex<HashMap<u64, Arc<AtomicBool>>>>;
 /// Reads requests until EOF, passing them on with a cancel flag. Acts on
 /// `cancel` here, and answers what can't be passed on (another protocol
 /// version) itself.
+///
+/// It reads ahead of the plugin with no limit. The core never has many
+/// requests outstanding: it cancels a superseded query, and waits for each
+/// other answer.
 fn read_requests(
     input: impl Read,
     requests: mpsc::Sender<(Request, Arc<AtomicBool>)>,
     out: Output,
     running: Running,
-) {
+) -> io::Result<()> {
     let mut input = BufReader::new(input);
     let mut buf = Vec::new();
     loop {
         let request: Request = match framing::read_message(&mut input, &mut buf) {
             Ok(Some(request)) => request,
-            Ok(None) => return,
-            Err(FrameError::Io(e)) => {
-                eprintln!("quick-launcher-plugin: reading requests: {e}");
-                return;
-            }
+            Ok(None) => return Ok(()),
+            Err(FrameError::Io(e)) => return Err(e),
             // There's no id to answer, so all we can do is log it.
             Err(e) => {
                 eprintln!("quick-launcher-plugin: skipping a request: {e}");
@@ -204,12 +213,8 @@ fn read_requests(
                 "this plugin speaks protocol {PROTOCOL}, not {}; rebuild it against the current SDK",
                 request.v
             );
-            if out
-                .send(&Response::new(request.id, error_body(message)))
-                .is_err()
-            {
-                return;
-            }
+            out.send(&Response::new(request.id, error_body(message)))
+                .map_err(into_io)?;
             continue;
         }
         if let Method::Cancel(params) = &request.method {
@@ -220,8 +225,10 @@ fn read_requests(
         }
         let flag = Arc::new(AtomicBool::new(false));
         running.lock().unwrap().insert(request.id, flag.clone());
+        // Fails only once the plugin thread has stopped on an output error,
+        // which `run_on` returns.
         if requests.send((request, flag)).is_err() {
-            return;
+            return Ok(());
         }
     }
 }
@@ -265,6 +272,13 @@ fn items_body(items: Vec<Item>) -> ResponseBody {
 
 fn error_body(message: String) -> ResponseBody {
     ResponseBody::Error(ErrorBody { message })
+}
+
+fn into_io(e: FrameError) -> io::Error {
+    match e {
+        FrameError::Io(e) => e,
+        e => io::Error::other(e),
+    }
 }
 
 fn panic_message(payload: &Box<dyn Any + Send>) -> &str {
