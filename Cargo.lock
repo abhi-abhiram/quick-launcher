@@ -30,6 +30,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "quick-launcher-apps"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "quick-launcher-plugin",
+ "serde_json",
+]
+
+[[package]]
 name = "quick-launcher-core"
 version = "0.1.0"
 dependencies = [

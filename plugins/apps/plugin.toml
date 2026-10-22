@@ -1,0 +1,12 @@
+protocol = 1
+id = "apps"
+name = "Apps"
+description = "Launch an installed app"
+icon = "󰀻"
+prefixes = ["app:"]
+placeholder = "Launch an app…"
+bin = "apps"
+kind = "list"
+global = true
+lifetime = "oneshot"
+env = "session"
