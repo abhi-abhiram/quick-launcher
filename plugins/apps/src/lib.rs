@@ -33,22 +33,29 @@ pub struct Env {
 
 impl Env {
     /// The process environment, with the XDG defaults where a variable is
-    /// unset or empty.
+    /// unset or empty. Relative data dirs are ignored, as XDG says.
     pub fn from_process() -> Env {
         let var = |name: &str| env::var(name).ok().filter(|value| !value.is_empty());
-        let home = var("HOME").map(PathBuf::from).unwrap_or_default();
-        let mut data_dirs = vec![
-            var("XDG_DATA_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home.join(".local/share")),
-        ];
-        let system = var("XDG_DATA_DIRS").unwrap_or_else(|| "/usr/local/share:/usr/share".into());
-        data_dirs.extend(
-            system
-                .split(':')
-                .filter(|dir| !dir.is_empty())
-                .map(PathBuf::from),
-        );
+        let paths = |name: &str| {
+            env::var_os(name)
+                .map(|value| env::split_paths(&value).collect::<Vec<_>>())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|path| path.is_absolute())
+                .collect::<Vec<_>>()
+        };
+        let home = env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+        let mut data_dirs = paths("XDG_DATA_HOME");
+        data_dirs.truncate(1);
+        if data_dirs.is_empty() {
+            data_dirs.push(home.join(".local/share"));
+        }
+        let system = paths("XDG_DATA_DIRS");
+        if system.is_empty() {
+            data_dirs.extend(["/usr/local/share", "/usr/share"].map(PathBuf::from));
+        } else {
+            data_dirs.extend(system);
+        }
         let locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
             .into_iter()
             .find_map(var)
@@ -111,17 +118,21 @@ impl App {
 /// itself: that's how a user removes a system app from menus.
 ///
 /// Unreadable files and dirs are reported on stderr and skipped, so one bad
-/// entry doesn't empty the list.
+/// entry doesn't empty the list. An unreadable entry hides nothing: the next
+/// one with its id is used instead.
 pub fn find_apps(env: &Env) -> Vec<App> {
     let mut seen = HashSet::new();
     let mut apps = Vec::new();
     for dir in &env.data_dirs {
         for (id, path) in desktop_files(&dir.join("applications")) {
-            if !seen.insert(id.clone()) {
+            if seen.contains(&id) {
                 continue;
             }
             match fs::read_to_string(&path) {
-                Ok(text) => apps.extend(app(id, &text, env)),
+                Ok(text) => {
+                    seen.insert(id.clone());
+                    apps.extend(app(id, &text, env));
+                }
                 Err(e) => eprintln!("apps: reading {}: {e}", path.display()),
             }
         }
@@ -139,12 +150,7 @@ fn app(id: String, text: &str, env: &Env) -> Option<App> {
     {
         return None;
     }
-    let only = entry.list("OnlyShowIn");
-    if !only.is_empty() && !env.desktops.iter().any(|d| only.contains(d)) {
-        return None;
-    }
-    let not = entry.list("NotShowIn");
-    if env.desktops.iter().any(|d| not.contains(d)) {
+    if !shown_in(&entry, &env.desktops) {
         return None;
     }
     if let Some(program) = entry.string("TryExec")
@@ -158,6 +164,7 @@ fn app(id: String, text: &str, env: &Env) -> Option<App> {
         .filter(|name| !name.is_empty())?;
     let detail = entry
         .localized("Comment", locale)
+        .filter(|detail| !detail.is_empty())
         .or_else(|| entry.localized("GenericName", locale))
         .filter(|detail| !detail.is_empty());
     let icon = entry
@@ -179,9 +186,26 @@ fn app(id: String, text: &str, env: &Env) -> Option<App> {
     })
 }
 
+/// `OnlyShowIn` and `NotShowIn` for the current desktops: the first desktop
+/// named in either list decides. When none is, an entry with `OnlyShowIn`
+/// is hidden and any other is shown.
+fn shown_in(entry: &desktop::Entry, desktops: &[String]) -> bool {
+    let (only, not) = (entry.list("OnlyShowIn"), entry.list("NotShowIn"));
+    for desktop in desktops {
+        if only.contains(desktop) {
+            return true;
+        }
+        if not.contains(desktop) {
+            return false;
+        }
+    }
+    only.is_empty()
+}
+
 /// Desktop files under `root`, recursively, with their ids: the path below
 /// `root` with `/` turned into `-`. Sorted, so the result doesn't depend on
-/// the order the filesystem lists them in.
+/// the order the filesystem lists them in. Symlinked files are read, but
+/// symlinked folders aren't followed, so a link cycle can't hang the walk.
 fn desktop_files(root: &Path) -> Vec<(String, PathBuf)> {
     let mut out = Vec::new();
     walk(root, "", &mut out);
@@ -203,7 +227,10 @@ fn walk(dir: &Path, prefix: &str, out: &mut Vec<(String, PathBuf)>) {
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        if path.is_dir() {
+        let Ok(meta) = path.symlink_metadata() else {
+            continue;
+        };
+        if meta.is_dir() {
             walk(&path, &format!("{prefix}{name}-"), out);
         } else if name.ends_with(".desktop") {
             out.push((format!("{prefix}{name}"), path));
@@ -211,14 +238,19 @@ fn walk(dir: &Path, prefix: &str, out: &mut Vec<(String, PathBuf)>) {
     }
 }
 
-/// Whether `TryExec`'s program exists: an absolute path as given, else a
-/// file of that name somewhere on `PATH`.
+/// Whether `TryExec`'s program is installed: an absolute path as given, else
+/// a file of that name somewhere on `PATH`, executable either way.
 fn installed(program: &str, path: &[PathBuf]) -> bool {
     let program = Path::new(program);
     if program.is_absolute() {
-        return program.is_file();
+        return executable(program);
     }
-    path.iter().any(|dir| dir.join(program).is_file())
+    path.iter().any(|dir| executable(&dir.join(program)))
+}
+
+fn executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
 }
 
 /// The plugin: lists [`find_apps`] for its [`Env`].

@@ -3,6 +3,7 @@
 
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -82,9 +83,15 @@ fn detail_falls_back_to_generic_name() {
     let dirs = Dirs::new("detail");
     entry(&dirs.system(), "a.desktop", "Name=A\nGenericName=Editor\n");
     entry(&dirs.system(), "b.desktop", "Name=B\n");
+    entry(
+        &dirs.system(),
+        "c.desktop",
+        "Name=C\nComment=\nGenericName=Viewer\n",
+    );
     let apps = find_apps(&dirs.env());
     assert_eq!(apps[0].detail.as_deref(), Some("Editor"));
     assert_eq!(apps[1].detail, None);
+    assert_eq!(apps[2].detail.as_deref(), Some("Viewer"));
 }
 
 #[test]
@@ -96,6 +103,37 @@ fn a_user_entry_hides_the_system_one_with_the_same_id() {
     let apps = find_apps(&dirs.env());
     assert_eq!(ids(&apps), ["editor.desktop", "other.desktop"]);
     assert_eq!(apps[0].name, "My Editor");
+}
+
+#[test]
+fn an_unreadable_user_entry_does_not_hide_the_system_one() {
+    let dirs = Dirs::new("unreadable");
+    entry(&dirs.system(), "editor.desktop", "Name=Editor\n");
+    fs::create_dir_all(dirs.user().join("applications")).unwrap();
+    std::os::unix::fs::symlink(
+        dirs.root.join("missing"),
+        dirs.user().join("applications/editor.desktop"),
+    )
+    .unwrap();
+    assert_eq!(ids(&find_apps(&dirs.env())), ["editor.desktop"]);
+}
+
+#[test]
+fn symlinked_files_are_read_but_symlinked_folders_are_not_followed() {
+    let dirs = Dirs::new("symlinks");
+    entry(&dirs.system(), "a/real.desktop", "Name=Real\n");
+    // A cycle: a/loop -> a. Following it would never end.
+    std::os::unix::fs::symlink("..", dirs.system().join("applications/a/loop")).unwrap();
+    entry(&dirs.root, "elsewhere.desktop", "Name=Linked\n");
+    std::os::unix::fs::symlink(
+        dirs.root.join("applications/elsewhere.desktop"),
+        dirs.system().join("applications/linked.desktop"),
+    )
+    .unwrap();
+    assert_eq!(
+        ids(&find_apps(&dirs.env())),
+        ["linked.desktop", "a-real.desktop"]
+    );
 }
 
 #[test]
@@ -230,11 +268,36 @@ fn only_show_in_and_not_show_in_follow_the_current_desktop() {
 }
 
 #[test]
+fn the_first_current_desktop_named_in_either_list_decides() {
+    let dirs = Dirs::new("desktop-order");
+    entry(
+        &dirs.system(),
+        "a.desktop",
+        "Name=A\nOnlyShowIn=ubuntu;\nNotShowIn=GNOME;\n",
+    );
+    entry(
+        &dirs.system(),
+        "b.desktop",
+        "Name=B\nOnlyShowIn=GNOME;\nNotShowIn=ubuntu;\n",
+    );
+    entry(&dirs.system(), "c.desktop", "Name=C\nOnlyShowIn=KDE;\n");
+    let env = Env {
+        desktops: vec!["ubuntu".into(), "GNOME".into()],
+        ..dirs.env()
+    };
+    assert_eq!(ids(&find_apps(&env)), ["a.desktop"]);
+}
+
+#[test]
 fn try_exec_must_name_an_installed_program() {
     let dirs = Dirs::new("tryexec");
     let bin = dirs.root.join("bin");
     fs::create_dir_all(&bin).unwrap();
     fs::write(bin.join("present"), "").unwrap();
+    fs::set_permissions(bin.join("present"), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(bin.join("plain"), "").unwrap();
+    fs::set_permissions(bin.join("plain"), fs::Permissions::from_mode(0o644)).unwrap();
+    entry(&dirs.system(), "d.desktop", "Name=D\nTryExec=plain\n");
     entry(&dirs.system(), "a.desktop", "Name=A\nTryExec=present\n");
     entry(&dirs.system(), "b.desktop", "Name=B\nTryExec=absent\n");
     let absolute = format!("Name=C\nTryExec={}\n", bin.join("present").display());

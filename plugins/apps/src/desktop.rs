@@ -164,7 +164,8 @@ fn unescape(raw: &str) -> String {
 }
 
 /// Splits a list on `;` that isn't escaped as `\;`, then unescapes each
-/// item.
+/// item. Whitespace written around an item is dropped, an escaped `\s`
+/// kept. Empty items, such as after the usual trailing `;`, are dropped.
 fn split_list(raw: &str) -> Vec<String> {
     let mut items = Vec::new();
     let mut current = String::new();
@@ -184,8 +185,9 @@ fn split_list(raw: &str) -> Vec<String> {
     items.push(current);
     items
         .iter()
-        .map(|item| unescape(item.trim()))
+        .map(|item| item.trim())
         .filter(|item| !item.is_empty())
+        .map(unescape)
         .collect()
 }
 
@@ -211,8 +213,8 @@ mod tests {
 
     #[test]
     fn lists_split_on_unescaped_semicolons() {
-        let entry = Entry::parse("[Desktop Entry]\nKeywords=web;a\\;b; ;net;\n").unwrap();
-        assert_eq!(entry.list("Keywords"), ["web", "a;b", "net"]);
+        let entry = Entry::parse("[Desktop Entry]\nKeywords=web;a\\;b; ;net;\\sx\\s;\n").unwrap();
+        assert_eq!(entry.list("Keywords"), ["web", "a;b", "net", " x "]);
     }
 
     #[test]
