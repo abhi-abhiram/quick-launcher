@@ -1,0 +1,17 @@
+[package]
+name = "quick-launcher-apps"
+description = "The quick launcher's bundled apps plugin: installed apps from desktop entries"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "apps"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+quick-launcher-plugin.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
