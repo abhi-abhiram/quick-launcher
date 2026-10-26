@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use quick_launcher_wire::Run;
 
-use crate::platform::Platform;
+use crate::platform::{Platform, non_empty};
 
 /// A manifest's `env`: how the plugin, and its `exec` and `terminal`
 /// actions, are started.
@@ -67,13 +67,6 @@ pub fn run_action(
     }
 }
 
-fn non_empty(argv: &[String]) -> io::Result<&[String]> {
-    if argv.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "argv is empty"));
-    }
-    Ok(argv)
-}
-
 fn has_relative_path(program: &str) -> bool {
     program.contains('/') && Path::new(program).is_relative()
 }
@@ -87,7 +80,10 @@ fn wrap(platform: &(impl Platform + ?Sized), plugin: PluginRef, argv: Vec<String
 
 fn cwd_or_home(cwd: Option<&str>, home: &Path) -> PathBuf {
     // Joining an absolute path replaces home, so this covers both.
-    home.join(cwd.unwrap_or(""))
+    match cwd {
+        Some(cwd) => home.join(cwd),
+        None => home.to_path_buf(),
+    }
 }
 
 #[cfg(test)]
@@ -167,6 +163,17 @@ mod tests {
                 cwd: Some(HOME.into())
             }]
         );
+    }
+
+    #[test]
+    fn the_default_cwd_is_home_exactly() {
+        // Path equality ignores a trailing `/`, so compare the text.
+        let [Call::Spawn { cwd: Some(cwd), .. }] =
+            &calls(exec(&["htop"], None), PluginEnv::Session)[..]
+        else {
+            panic!("expected one spawn");
+        };
+        assert_eq!(cwd.as_os_str(), HOME);
     }
 
     #[test]

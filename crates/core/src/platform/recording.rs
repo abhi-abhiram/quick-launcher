@@ -7,7 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use super::{Dirs, Platform};
+use super::{Dirs, Platform, non_empty};
 
 /// One call a [`Recording`] received.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,14 +55,14 @@ impl Recording {
 impl Platform for Recording {
     fn spawn(&self, argv: &[String], cwd: Option<&Path>) -> io::Result<()> {
         self.record(Call::Spawn {
-            argv: argv.to_vec(),
+            argv: non_empty(argv)?.to_vec(),
             cwd: cwd.map(Path::to_path_buf),
         })
     }
 
     fn terminal(&self, argv: &[String], cwd: Option<&Path>) -> io::Result<()> {
         self.record(Call::Terminal {
-            argv: argv.to_vec(),
+            argv: non_empty(argv)?.to_vec(),
             cwd: cwd.map(Path::to_path_buf),
         })
     }

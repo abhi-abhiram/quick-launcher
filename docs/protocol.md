@@ -454,8 +454,11 @@ user triggers them is up to the frontend (see
 | `{"copy": "text"}` | Put text on the clipboard. |
 | `{"plugin": "<action id>"}` | Send `activate` to the plugin and apply its `result`. |
 
-`cwd` is optional and defaults to the home folder. Relative argv paths in
-`exec` resolve against the plugin folder. argv is never run through a shell;
+`cwd` is optional and defaults to the home folder; a relative `cwd`
+resolves against the home folder. In `exec`, a relative program path (the
+first argv entry, when it contains a `/`, such as `./run.sh` or `bin/tool`)
+resolves against the plugin folder. A bare program name is looked up on
+`PATH`, and the other arguments are passed as given. argv is never run through a shell;
 a plugin that wants shell features (the terminal plugin) puts the shell in
 its own argv. Plugins describe *what* to run, never *how* on a given OS, so
 they work unchanged on any platform the core supports.

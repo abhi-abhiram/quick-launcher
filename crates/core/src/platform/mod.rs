@@ -14,6 +14,8 @@ pub use omarchy::Omarchy;
 pub use recording::{Call, Recording};
 
 /// The OS calls the core makes. `Omarchy` is the only implementation.
+///
+/// `spawn` and `terminal` refuse an empty argv with `InvalidInput`.
 pub trait Platform {
     /// Start argv detached from the core.
     fn spawn(&self, argv: &[String], cwd: Option<&Path>) -> io::Result<()>;
@@ -60,4 +62,12 @@ impl Dirs {
     pub fn state_for(&self, id: &str) -> PathBuf {
         self.plugin_state.join(id)
     }
+}
+
+/// argv, or an `InvalidInput` error when it's empty.
+pub(crate) fn non_empty(argv: &[String]) -> io::Result<&[String]> {
+    if argv.is_empty() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "argv is empty"));
+    }
+    Ok(argv)
 }

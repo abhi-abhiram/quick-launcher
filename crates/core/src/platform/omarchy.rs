@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::{env, thread};
 
-use super::{Dirs, Platform};
+use super::{Dirs, Platform, non_empty};
 
 /// The platform the core runs on today.
 #[derive(Debug, Clone)]
@@ -40,12 +40,12 @@ impl Omarchy {
 
 impl Platform for Omarchy {
     fn spawn(&self, argv: &[String], cwd: Option<&Path>) -> io::Result<()> {
-        detach(spawn_argv(argv), self.cwd(cwd))
+        detach(spawn_argv(non_empty(argv)?), self.cwd(cwd))
     }
 
     fn terminal(&self, argv: &[String], cwd: Option<&Path>) -> io::Result<()> {
         let cwd = self.cwd(cwd);
-        detach(terminal_argv(argv, cwd), cwd)
+        detach(terminal_argv(non_empty(argv)?, cwd), cwd)
     }
 
     fn launch_app(&self, id: &str) -> io::Result<()> {
@@ -82,14 +82,14 @@ impl Platform for Omarchy {
 }
 
 /// `setsid uwsm-app -- <argv>`.
-pub fn spawn_argv(argv: &[String]) -> Vec<String> {
+pub(crate) fn spawn_argv(argv: &[String]) -> Vec<String> {
     strings(["setsid", "uwsm-app", "--"])
         .chain(argv.iter().cloned())
         .collect()
 }
 
 /// `setsid uwsm-app -- xdg-terminal-exec --dir=<cwd> <argv>`.
-pub fn terminal_argv(argv: &[String], cwd: &Path) -> Vec<String> {
+pub(crate) fn terminal_argv(argv: &[String], cwd: &Path) -> Vec<String> {
     strings(["setsid", "uwsm-app", "--", "xdg-terminal-exec"])
         .chain([format!("--dir={}", cwd.display())])
         .chain(argv.iter().cloned())
@@ -97,24 +97,24 @@ pub fn terminal_argv(argv: &[String], cwd: &Path) -> Vec<String> {
 }
 
 /// `setsid uwsm-app -- <id>`, which uwsm-app reads as a desktop entry id.
-pub fn launch_app_argv(id: &str) -> Vec<String> {
+pub(crate) fn launch_app_argv(id: &str) -> Vec<String> {
     spawn_argv(&[id.to_owned()])
 }
 
 /// `xdg-open <target>`.
-pub fn open_argv(target: &str) -> Vec<String> {
+pub(crate) fn open_argv(target: &str) -> Vec<String> {
     strings(["xdg-open", target]).collect()
 }
 
 /// `wl-copy`, which reads the text from stdin.
-pub fn copy_argv() -> Vec<String> {
+pub(crate) fn copy_argv() -> Vec<String> {
     strings(["wl-copy"]).collect()
 }
 
 /// `bash -lc 'exec "$@"' bash <argv>`: a login shell that replaces itself
 /// with argv, so the profile's variables and `PATH` apply and no argument is
 /// parsed by the shell.
-pub fn login_argv(argv: &[String]) -> Vec<String> {
+pub(crate) fn login_argv(argv: &[String]) -> Vec<String> {
     strings(["bash", "-lc", r#"exec "$@""#, "bash"])
         .chain(argv.iter().cloned())
         .collect()
@@ -123,7 +123,7 @@ pub fn login_argv(argv: &[String]) -> Vec<String> {
 /// The core's directories from the XDG base directory variables, read
 /// through `var`. Unset, empty and relative values take the XDG default, as
 /// the spec says.
-pub fn xdg_dirs(var: impl Fn(&str) -> Option<OsString>) -> io::Result<Dirs> {
+pub(crate) fn xdg_dirs(var: impl Fn(&str) -> Option<OsString>) -> io::Result<Dirs> {
     let home = var("HOME")
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
@@ -162,9 +162,10 @@ fn detach(argv: Vec<String>, cwd: &Path) -> io::Result<()> {
 /// argv as a command in `cwd`. stdout is the frontend protocol, so nothing
 /// started may write to it; stderr goes to the core's log.
 fn command(argv: &[String], cwd: &Path) -> Command {
-    let mut command = Command::new(&argv[0]);
+    let (program, args) = argv.split_first().expect("every builder names a program");
+    let mut command = Command::new(program);
     command
-        .args(&argv[1..])
+        .args(args)
         .current_dir(cwd)
         .stdout(Stdio::null())
         .stderr(Stdio::inherit());
@@ -223,6 +224,14 @@ mod tests {
             argv(&["xdg-open", "https://example.com"])
         );
         assert_eq!(copy_argv(), argv(&["wl-copy"]));
+    }
+
+    #[test]
+    fn an_empty_argv_is_refused_before_anything_starts() {
+        let omarchy = Omarchy::with_dirs(xdg_dirs(env(&[("HOME", "/home/me")])).unwrap());
+        for result in [omarchy.spawn(&[], None), omarchy.terminal(&[], None)] {
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        }
     }
 
     #[test]
