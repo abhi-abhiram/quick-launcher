@@ -54,8 +54,8 @@ pub struct Action {
 /// What an action does: exactly one of the six forms.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Run {
-    /// Start argv detached. Relative argv paths resolve against the plugin
-    /// folder; `cwd` defaults to the home folder.
+    /// Start argv detached. A relative program path (one with a `/`)
+    /// resolves against the plugin folder; `cwd` defaults to the home folder.
     Exec {
         argv: Vec<String>,
         cwd: Option<String>,
