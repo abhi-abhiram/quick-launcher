@@ -592,7 +592,7 @@ fn a_refresh_action_asks_again_instead_of_closing() {
 }
 
 #[test]
-fn leave_mode_and_complete_do_nothing_without_modes() {
+fn leave_mode_and_complete_do_nothing_without_a_mode_or_a_hint() {
     let mut test = Test::new(vec![global("apps")]);
     test.open();
     assert_eq!(test.send(Incoming::LeaveMode), []);
@@ -868,7 +868,7 @@ fn the_plain_search_keeps_global_items_while_in_a_mode() {
     assert_eq!(refs(&state), [] as [&str; 0]);
     assert!(state.loading, "pi hasn't answered");
     let state = last_state(&test.send(Incoming::LeaveMode));
-    assert_eq!(refs(&state), ["apps/a"]);
+    assert_eq!(refs(&state), ["pi:mode", "apps/a"]);
 }
 
 #[test]
@@ -1216,4 +1216,393 @@ fn reentering_a_query_mode_asks_again_even_for_the_same_query() {
     test.send(Incoming::LeaveMode);
     let effects = test.input_in(2, None, "calc:1");
     assert_eq!(requests(&effects), [("calc", &query("1"))]);
+}
+
+/// `apps` (global), `pi`, `pics` (whose name starts like pi's) and `term`
+/// with two prefixes, all list modes.
+fn hinted() -> Test {
+    Test::new(vec![
+        global("apps"),
+        plugin("pi", "icon = \"π\"\ndescription = \"Open pi in a project\""),
+        plugin("pics", ""),
+        with_prefixes("term", &[">", "term:"], ""),
+    ])
+}
+
+fn complete(test: &mut Test, item: Option<&str>) -> Vec<Effect> {
+    test.send(Incoming::Complete {
+        item: item.map(Into::into),
+    })
+}
+
+#[test]
+fn a_hint_is_an_item_built_from_the_mode() {
+    let mut test = hinted();
+    test.open();
+    let state = test.input(1, "pi");
+    let hint = &state.items[0];
+    assert_eq!(
+        hint,
+        &FrontendItem {
+            item_ref: "pi:mode".into(),
+            label: "PI".into(),
+            detail: Some("pi: · Open pi in a project".into()),
+            icon: Some(Icon::Glyph("π".into())),
+            badge: None,
+            disabled: false,
+            actions: vec![FrontendAction {
+                id: "enter".into(),
+                title: "Open PI".into(),
+                key: None,
+            }],
+        }
+    );
+    // Without a description the detail is the prefixes alone.
+    let state = test.input(2, "ter");
+    assert_eq!(refs(&state), ["term:mode"]);
+    assert_eq!(state.items[0].detail.as_deref(), Some("> term:"));
+}
+
+#[test]
+fn hints_match_the_start_of_a_name_or_a_prefix_ignoring_case() {
+    let mut test = hinted();
+    test.open();
+    assert_eq!(refs(&test.input(1, "P")), ["pi:mode", "pics:mode"]);
+    assert_eq!(refs(&test.input(2, "TER")), ["term:mode"]);
+    // `>` is a prefix, so typing it enters the mode instead.
+    assert_eq!(refs(&test.input(3, "erm")), [] as [&str; 0]);
+    assert_eq!(
+        refs(&test.input(4, "  ")),
+        [] as [&str; 0],
+        "no hints when empty"
+    );
+}
+
+#[test]
+fn the_plain_search_is_named_modes_then_global_items_then_other_modes() {
+    // v0's order: the mode the query names, the apps, the other modes.
+    let mut test = hinted();
+    let [apps] = test.open()[..] else { panic!() };
+    test.items(
+        apps,
+        vec![
+            copy("spider", "Spider"),
+            copy("pinta", "Pinta"),
+            copy("gimp", "GIMP"),
+        ],
+    );
+    let state = test.input(1, "pi");
+    assert_eq!(
+        refs(&state),
+        ["pi:mode", "apps/pinta", "apps/spider", "pics:mode"]
+    );
+    // `term` names the mode by its prefix without the `:`.
+    assert_eq!(refs(&test.input(2, "term"))[0], "term:mode");
+    // A query no mode is named by puts every hint after the items.
+    assert_eq!(refs(&test.input(3, "pic")), ["pics:mode"], "no app matches");
+    assert_eq!(
+        refs(&test.input(4, "p")),
+        [
+            "apps/pinta",
+            "apps/spider",
+            "apps/gimp",
+            "pi:mode",
+            "pics:mode"
+        ]
+    );
+}
+
+#[test]
+fn several_named_hints_keep_discovery_order() {
+    let mut test = Test::new(vec![
+        global("apps"),
+        with_prefixes("one", &["o:"], ""),
+        with_prefixes("two", &["one:"], ""),
+    ]);
+    let [apps] = test.open()[..] else { panic!() };
+    test.items(apps, vec![copy("onenote", "OneNote")]);
+    // `one` is the first's name and the second's prefix less its `:`.
+    assert_eq!(
+        refs(&test.input(1, "one")),
+        ["one:mode", "two:mode", "apps/onenote"]
+    );
+}
+
+#[test]
+fn hints_count_toward_max_items() {
+    let mut test = hinted();
+    test.send(Incoming::Hello {
+        v: 1,
+        client: "test".into(),
+        client_version: "1".into(),
+        max_items: 2,
+    });
+    let [apps] = test.open()[..] else { panic!() };
+    test.items(apps, vec![copy("pinta", "Pinta"), copy("spider", "Spider")]);
+    assert_eq!(refs(&test.input(1, "pi")), ["pi:mode", "apps/pinta"]);
+    // A hint cut off by max_items can't be activated.
+    let state = only_state(test.activate("pics:mode", "enter"));
+    assert_eq!(mode_id(&state), None);
+}
+
+#[test]
+fn hints_are_only_in_the_plain_search() {
+    let mut test = hinted();
+    test.open();
+    let state = last_state(&test.input_in(1, Some("pics"), "pi"));
+    assert_eq!(mode_id(&state), Some("pics"));
+    assert_eq!(refs(&state), [] as [&str; 0]);
+}
+
+#[test]
+fn complete_enters_the_first_hints_mode_with_empty_text() {
+    let mut test = hinted();
+    let [apps] = test.open()[..] else { panic!() };
+    test.items(apps, vec![copy("pinta", "Pinta")]);
+    test.input(5, "pic");
+    let effects = complete(&mut test, None);
+    assert_eq!(requests(&effects), [("pics", &Method::list())]);
+    let state = last_state(&effects);
+    assert_eq!(mode_id(&state), Some("pics"));
+    assert_eq!(state.text, "");
+    assert_eq!(state.seq, 5, "carries the last seq");
+    // Entered without a prefix, so leaving puts back its first one.
+    let state = last_state(&test.send(Incoming::LeaveMode));
+    assert_eq!(state.text, "pics");
+}
+
+#[test]
+fn complete_without_a_selected_hint_skips_the_items() {
+    let mut test = hinted();
+    let [apps] = test.open()[..] else { panic!() };
+    test.items(apps, vec![copy("pinta", "Pinta")]);
+    test.input(1, "p");
+    // The selected row is an app, so the first hint is completed.
+    let state = last_state(&complete(&mut test, Some("apps/pinta")));
+    assert_eq!(mode_id(&state), Some("pi"));
+}
+
+#[test]
+fn complete_enters_the_selected_hints_mode() {
+    let mut test = hinted();
+    test.open();
+    test.input(1, "p");
+    let state = last_state(&complete(&mut test, Some("pics:mode")));
+    assert_eq!(mode_id(&state), Some("pics"));
+}
+
+#[test]
+fn complete_with_a_hint_seen_before_a_prefix_entered_a_mode() {
+    // The user typed `pi:` and pressed Tab on `term`'s hint, which they
+    // still saw, before the core's state for `pi:` arrived.
+    let mut test = hinted();
+    test.open();
+    test.input(1, "p");
+    let pi = request_id(&test.input_in(2, None, "pi:"), "pi");
+    let effects = complete(&mut test, Some("term:mode"));
+    assert_eq!(effects[0], Effect::Cancel(pi));
+    assert_eq!(requests(&effects), [("term", &Method::list())]);
+    assert_eq!(mode_id(&last_state(&effects)), Some("term"));
+}
+
+#[test]
+fn complete_does_nothing_without_a_hint() {
+    let mut test = hinted();
+    test.open();
+    test.input(1, "zzz");
+    assert_eq!(complete(&mut test, None), []);
+    assert_eq!(complete(&mut test, Some("nope:mode")), []);
+    // A mode shows no hints, so there is nothing to complete.
+    test.input_in(2, None, "pi:");
+    assert_eq!(complete(&mut test, None), []);
+    assert!(
+        test.lines
+            .get()
+            .iter()
+            .any(|line| line.contains("nothing to complete"))
+    );
+}
+
+#[test]
+fn activating_a_hint_enters_its_mode_and_sends_state_not_done() {
+    let mut test = hinted();
+    test.open();
+    test.input(3, "te");
+    let effects = test.activate("term:mode", "enter");
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Run { .. } | Effect::Send(Outgoing::Done))),
+        "{effects:?}"
+    );
+    assert_eq!(requests(&effects), [("term", &Method::list())]);
+    let state = last_state(&effects);
+    assert_eq!(mode_id(&state), Some("term"));
+    assert_eq!((state.text.as_str(), state.seq), ("", 3));
+    let state = last_state(&test.send(Incoming::LeaveMode));
+    assert_eq!(state.text, "", "`>` less its last character");
+}
+
+#[test]
+fn a_hint_has_only_the_enter_action_and_must_be_shown() {
+    let mut test = hinted();
+    test.open();
+    test.input(1, "pi");
+    let state = only_state(test.activate("pi:mode", "0"));
+    assert_eq!(mode_id(&state), None);
+    // `term`'s hint isn't shown for `pi`.
+    let state = only_state(test.activate("term:mode", "enter"));
+    assert_eq!(mode_id(&state), None);
+}
+
+/// `apps` (global) and `term`, a list mode with a `[query_item]`.
+fn with_query_item() -> Test {
+    Test::new(vec![
+        global("apps"),
+        plugin(
+            "term",
+            r#"icon = ">"
+[query_item]
+label = "{query}"
+detail = "Run {query} in a terminal"
+actions = [
+  { id = "run", title = "Run {query}", key = "ctrl+r", run = { terminal = ["sh", "-c", "{query}"], cwd = "~/{query}" } },
+  { title = "Copy", run = { copy = "{query}" } },
+]
+"#,
+        ),
+    ])
+}
+
+/// Enters `term` and answers its list with `items`.
+fn in_term(test: &mut Test, items: Vec<Item>) {
+    test.open();
+    let term = request_id(&test.input_in(1, None, "term:"), "term");
+    test.items(term, items);
+}
+
+#[test]
+fn a_query_item_is_filled_in_and_shown_first() {
+    let mut test = with_query_item();
+    in_term(
+        &mut test,
+        vec![copy("ls-la", "ls -la"), copy("lsblk", "lsblk")],
+    );
+    let state = last_state(&test.input_in(2, Some("term"), "ls  "));
+    assert_eq!(refs(&state), ["term:query:ls", "term/ls-la", "term/lsblk"]);
+    assert_eq!(state.text, "ls  ", "the state keeps trailing whitespace");
+    assert_eq!(
+        state.items[0],
+        FrontendItem {
+            item_ref: "term:query:ls".into(),
+            label: "ls".into(),
+            detail: Some("Run ls in a terminal".into()),
+            icon: Some(Icon::Glyph(">".into())),
+            badge: None,
+            disabled: false,
+            actions: vec![
+                FrontendAction {
+                    id: "run".into(),
+                    title: "Run ls".into(),
+                    key: Some("ctrl+r".into()),
+                },
+                FrontendAction {
+                    id: "1".into(),
+                    title: "Copy".into(),
+                    key: None,
+                },
+            ],
+        }
+    );
+}
+
+#[test]
+fn a_query_item_is_hidden_for_an_empty_query() {
+    let mut test = with_query_item();
+    in_term(&mut test, vec![copy("ls", "ls")]);
+    let state = last_state(&test.input_in(2, Some("term"), "   "));
+    assert_eq!(refs(&state), ["term/ls"]);
+}
+
+#[test]
+fn a_query_item_is_hidden_while_a_filtered_item_has_exactly_its_label() {
+    let mut test = with_query_item();
+    in_term(&mut test, vec![copy("ls-la", "ls -la"), copy("ls", "ls")]);
+    let state = last_state(&test.input_in(2, Some("term"), "ls"));
+    assert_eq!(refs(&state), ["term/ls", "term/ls-la"]);
+    // A label that only differs in case is another command.
+    let state = last_state(&test.input_in(3, Some("term"), "LS"));
+    assert_eq!(refs(&state), ["term:query:LS", "term/ls", "term/ls-la"]);
+}
+
+#[test]
+fn a_query_item_is_only_in_its_mode() {
+    let mut test = Test::new(vec![plugin(
+        "hist",
+        "global = true\n[query_item]\nlabel = \"{query}\"\nactions = [{ title = \"Run\", run = { copy = \"{query}\" } }]",
+    )]);
+    let [hist] = test.open()[..] else { panic!() };
+    test.items(hist, vec![copy("ls", "lsblk")]);
+    assert_eq!(refs(&test.input(1, "ls")), ["hist/ls"]);
+}
+
+#[test]
+fn query_item_refs_never_equal_an_items() {
+    let mut test = with_query_item();
+    // Items whose ids look like the core's own refs.
+    in_term(
+        &mut test,
+        vec![copy(":query:x", "x one"), copy("mode", "x two")],
+    );
+    let state = last_state(&test.input_in(2, Some("term"), "x"));
+    assert_eq!(refs(&state), ["term:query:x", "term/:query:x", "term/mode"]);
+    // Each ref still runs its own item.
+    let run = |test: &mut Test, item: &str, action: &str| match &test.activate(item, action)[..] {
+        [Effect::Run { run, .. }] => run.clone(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(run(&mut test, "term:query:x", "1"), Run::Copy("x".into()));
+    test.session.handle(Event::Ran(Err("try again".into())));
+    assert_eq!(
+        run(&mut test, "term/:query:x", "0"),
+        Run::Copy(":query:x".into())
+    );
+    test.session.handle(Event::Ran(Err("try again".into())));
+    assert_eq!(run(&mut test, "term/mode", "0"), Run::Copy("mode".into()));
+}
+
+#[test]
+fn a_query_item_runs_with_the_text_it_was_built_from() {
+    let mut test = with_query_item();
+    in_term(&mut test, Vec::new());
+    test.input_in(2, Some("term"), "ls");
+    // Newer input arrives before the user's Enter on `ls`.
+    test.input_in(3, Some("term"), "lsb");
+    let [Effect::Run { plugin, run }] = &test.activate("term:query:ls", "run")[..] else {
+        panic!()
+    };
+    assert_eq!(plugin.id(), "term");
+    assert_eq!(
+        run,
+        &Run::Terminal {
+            argv: vec!["sh".into(), "-c".into(), "ls".into()],
+            cwd: Some("~/ls".into()),
+        }
+    );
+}
+
+#[test]
+fn a_query_item_resolves_only_in_its_mode() {
+    let mut test = with_query_item();
+    in_term(&mut test, Vec::new());
+    test.input_in(2, Some("term"), "ls");
+    test.send(Incoming::LeaveMode);
+    only_state(test.activate("term:query:ls", "run"));
+    test.input_in(3, None, "term:");
+    // An empty recorded text was never shown.
+    only_state(test.activate("term:query:", "run"));
+    assert!(matches!(
+        &test.activate("term:query:ls", "run")[..],
+        [Effect::Run { .. }]
+    ));
 }

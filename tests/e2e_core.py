@@ -241,6 +241,31 @@ class Modes(Core):
         state = client.wait_for(lambda m: m["type"] == "state" and m["mode"] is None)
         self.assertEqual(state["text"], "hidden")
 
+    def test_mode_hints_complete_and_enter_their_mode(self):
+        client = self.ready()
+        client.open()
+        client.settled_state()
+        client.input("hid")
+        state = self.state_for(client, 1)
+        hints = [item for item in state["items"] if item["label"] == "Hidden"]
+        self.assertEqual(len(hints), 1)
+        self.assertEqual(hints[0]["detail"], "hidden:")
+        self.assertEqual(hints[0]["actions"], [{"id": "enter", "title": "Open Hidden"}])
+
+        client.send("complete")
+        state = client.wait_for(lambda m: m["type"] == "state" and m["mode"] and not m["loading"])
+        self.assertEqual((state["mode"]["id"], state["text"], state["seq"]), ("hidden", "", 1))
+        self.assertEqual(refs(state), ["hidden/one", "hidden/two"])
+
+        client.send("leave_mode")
+        state = client.wait_for(lambda m: m["type"] == "state" and m["mode"] is None)
+        self.assertEqual(state["text"], "hidden")
+        # Activating the hint enters the mode too, with a state and no done.
+        client.activate(hints[0]["ref"], "enter")
+        state = client.wait_for(lambda m: m["type"] == "state" and m["mode"] and not m["loading"])
+        self.assertEqual(state["mode"]["id"], "hidden")
+        self.assertEqual(self.calls(), [])
+
     def test_a_query_mode_asks_on_every_input(self):
         client = self.ready()
         client.open()

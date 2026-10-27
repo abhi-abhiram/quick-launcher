@@ -234,7 +234,7 @@ counts toward `max_items`:
 |-----------|-------|
 | `ref`     | made by the core; never equal to a plugin item's |
 | `label`   | the mode's `name` |
-| `detail`  | its prefixes, then ` · `, then its `description` |
+| `detail`  | its prefixes, separated by spaces, then ` · ` and its `description` when it has one |
 | `icon`    | the mode's icon |
 | `actions` | one: `{"id": "enter", "title": "Open <name>"}` |
 
