@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 
 from core_client import CoreClient  # noqa: E402
+from plugin_layout import lay_out  # noqa: E402
 
 TARGET = ROOT / "target" / "e2e"
 BINS = TARGET / "debug"
@@ -34,6 +35,9 @@ def setUpModule():
     for package, extra in [
         ("quick-launcher-core", ["--features", "recording-platform"]),
         ("quick-launcher-core-fixtures", []),
+        # The bundled plugins, which `BundledPlugins` lays out.
+        ("quick-launcher-apps", []),
+        ("quick-launcher-pi", []),
     ]:
         subprocess.run(
             ["cargo", "build", "--bins", "-p", package, "--target-dir", str(TARGET), *extra],
@@ -69,7 +73,7 @@ class Core(unittest.TestCase):
 
     def start(self, *args):
         env = {
-            "PATH": os.environ.get("PATH", ""),
+            "PATH": os.pathsep.join([str(self.home / "bin"), os.environ.get("PATH", "")]),
             "HOME": str(self.home),
             "XDG_DATA_HOME": str(self.home / "data"),
             "XDG_CONFIG_HOME": str(self.home / "config"),
@@ -429,6 +433,68 @@ class BundledPluginsFlag(Core):
         client.recv()
         client.open()
         self.assertEqual(refs(client.settled_state()), ["gamma/one", "gamma/two"])
+
+
+class BundledPlugins(Core):
+    """The real bundled plugins, laid out as `tools/dev.py` lays them out."""
+
+    def setUp(self):
+        super().setUp()
+        lay_out(self.bundled, BINS)
+        # The recording platform's login command puts `login` in front of a
+        # `login` plugin's argv. This one runs the rest as it is.
+        bin_dir = self.home / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "login").write_text('#!/bin/sh\nexec "$@"\n')
+        (bin_dir / "login").chmod(0o755)
+
+    def pi_session(self, name, mtime):
+        project = self.home / "Projects" / name
+        project.mkdir(parents=True)
+        group = self.home / ".pi/agent/sessions" / name
+        group.mkdir(parents=True)
+        session = group / "session.jsonl"
+        session.write_text(json.dumps({"type": "session", "cwd": str(project)}) + "\n")
+        os.utime(session, (mtime, mtime))
+        return str(project)
+
+    def test_pi_lists_projects_and_pins_and_unpins_them(self):
+        self.pi_session("alpha", 100)
+        beta = self.pi_session("beta", 200)
+        client = self.ready()
+        client.open()
+        client.settled_state()
+        client.input("pi:")
+        state = client.wait_for(
+            lambda m: m["type"] == "state" and not m["loading"] and (m["mode"] or {}).get("id") == "pi"
+        )
+        self.assertEqual([item["label"] for item in state["items"]], ["beta", "alpha"])
+        self.assertEqual(state["items"][0]["detail"], "~/Projects/beta · last used")
+        self.assertEqual(state["items"][0]["icon"], {"glyph": "π"})
+        self.assertEqual([a["id"] for a in state["items"][0]["actions"]], ["open", "pin"])
+
+        client.activate(state["items"][0]["ref"], "pin")
+        state = client.wait_for(
+            lambda m: m["type"] == "state" and not m["loading"]
+            and m["items"] and m["items"][0]["icon"] == {"glyph": "󰐃"}
+        )
+        self.assertEqual([a["id"] for a in state["items"][0]["actions"]], ["open", "unpin"])
+        pins = self.home / "config/quick-launcher/pi/pinned.json"
+        self.assertEqual(json.loads(pins.read_text()), {"projects": [beta]})
+
+        client.activate(state["items"][0]["ref"], "unpin")
+        client.wait_for(
+            lambda m: m["type"] == "state" and not m["loading"]
+            and m["items"] and m["items"][0]["icon"] == {"glyph": "π"}
+        )
+        self.assertEqual(json.loads(pins.read_text()), {"projects": []})
+
+        client.activate(state["items"][0]["ref"], "open")
+        client.wait_for(lambda m: m["type"] == "done")
+        self.assertEqual(
+            self.calls(),
+            [{"terminal": {"argv": ["login", "pi"], "cwd": beta}}],
+        )
 
 
 class Rescan(Core):

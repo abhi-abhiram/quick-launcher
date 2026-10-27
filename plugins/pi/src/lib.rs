@@ -23,13 +23,14 @@ pub const RECENT_LIMIT: usize = 20;
 pub const PINNED_ICON: &str = "󰐃";
 
 /// Where the plugin reads and writes.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Env {
-    /// `QL_CONFIG_DIR`, where pins are written.
+    /// `QL_CONFIG_DIR`, where pins are written. Created on the first write.
     pub config_dir: PathBuf,
     /// `XDG_CONFIG_HOME`, else `~/.config`: where v0 and the older
     /// pi-launcher widget kept pins.
     pub xdg_config_home: PathBuf,
+    /// `HOME`: shown as `~`, and never a project.
     pub home: PathBuf,
     /// `PI_CODING_AGENT_DIR`, when set.
     pub agent_dir: Option<PathBuf>,
@@ -39,7 +40,9 @@ pub struct Env {
 
 impl Env {
     /// The process environment. Fails when `QL_CONFIG_DIR` isn't set, which
-    /// the core always sets.
+    /// the core always sets. The plugin keeps nothing in `QL_STATE_DIR`, so
+    /// it isn't needed. Without `HOME`, nothing is shown as `~` and pi's
+    /// default folder is relative, so no recent projects are found.
     pub fn from_process() -> anyhow::Result<Env> {
         let var = |name: &str| {
             env::var_os(name)
@@ -48,7 +51,9 @@ impl Env {
         };
         let home = var("HOME").unwrap_or_default();
         Ok(Env {
-            config_dir: quick_launcher_plugin::dirs()?.config,
+            config_dir: var("QL_CONFIG_DIR").ok_or_else(|| {
+                anyhow!("QL_CONFIG_DIR is not set; the launcher sets it when it starts a plugin")
+            })?,
             xdg_config_home: var("XDG_CONFIG_HOME").unwrap_or_else(|| home.join(".config")),
             agent_dir: var("PI_CODING_AGENT_DIR"),
             session_dir: var("PI_CODING_AGENT_SESSION_DIR"),
@@ -97,7 +102,7 @@ impl Env {
             // working directory, so there is no single folder to read
             // recents from.
             eprintln!(
-                "pi: ignoring relative sessionDir {configured:?}; \
+                "ignoring relative sessionDir {configured:?}; \
                  recent projects come from the default session folder"
             );
         }
@@ -105,7 +110,7 @@ impl Env {
     }
 }
 
-/// `~` and `~/…` against `home`, like Python's `Path.expanduser`.
+/// `~` and `~/…` against `home`. `~user` is left as it is.
 fn expand_tilde(path: &Path, home: &Path) -> PathBuf {
     match path.strip_prefix("~") {
         Ok(rest) => home.join(rest),
@@ -115,8 +120,9 @@ fn expand_tilde(path: &Path, home: &Path) -> PathBuf {
 
 /// Pinned folders, in pin order. Reads the plugin's own file, else v0's,
 /// else the widget's; none existing means no pins. A file that exists but
-/// can't be read or isn't a pins file is an error, and the files after it
-/// aren't tried.
+/// can't be read, isn't JSON or isn't a JSON object is an error, and the
+/// files after it aren't tried. An object without a `projects` list is no
+/// pins.
 pub fn read_pins(env: &Env) -> anyhow::Result<Vec<String>> {
     for file in [env.pins_file(), env.v0_pins_file(), env.widget_pins_file()] {
         match fs::read_to_string(&file) {
@@ -316,7 +322,7 @@ impl Plugin for Pi {
         let env = &self.0;
         // A broken pins file still lists the recent projects, as in v0.
         let pinned = read_pins(env).unwrap_or_else(|e| {
-            eprintln!("pi: ignoring pins: {e:#}");
+            eprintln!("ignoring pins: {e:#}");
             Vec::new()
         });
         let recent = recent_projects(&env.sessions_dir(), &env.home, RECENT_LIMIT);
