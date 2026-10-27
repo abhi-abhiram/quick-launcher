@@ -1606,3 +1606,43 @@ fn a_query_item_resolves_only_in_its_mode() {
         [Effect::Run { .. }]
     ));
 }
+
+#[test]
+fn a_hint_without_prefixes_has_only_its_description_or_no_detail() {
+    // Conflicts can take every prefix of a later plugin.
+    let mut described = plugin("pi", "description = \"Projects\"");
+    described.prefixes.clear();
+    let mut bare = plugin("pics", "");
+    bare.prefixes.clear();
+    let mut test = Test::new(vec![described, bare]);
+    test.open();
+    let state = test.input(1, "pi");
+    assert_eq!(refs(&state), ["pi:mode", "pics:mode"]);
+    assert_eq!(state.items[0].detail.as_deref(), Some("Projects"));
+    assert_eq!(state.items[1].detail, None);
+}
+
+#[test]
+fn complete_takes_a_hint_the_state_no_longer_shows_but_activate_does_not() {
+    let mut test = hinted();
+    test.open();
+    test.input(1, "zzz");
+    // Enter on the stale hint runs nothing and resends the state.
+    let state = only_state(test.activate("pi:mode", "enter"));
+    assert_eq!(mode_id(&state), None);
+    // Tab on it enters the mode the user saw.
+    let state = last_state(&complete(&mut test, Some("pi:mode")));
+    assert_eq!(mode_id(&state), Some("pi"));
+}
+
+#[test]
+fn a_query_item_hidden_by_the_dedupe_still_runs_from_its_ref() {
+    let mut test = with_query_item();
+    in_term(&mut test, vec![copy("ls", "ls")]);
+    let state = last_state(&test.input_in(2, Some("term"), "ls"));
+    assert_eq!(refs(&state), ["term/ls"]);
+    assert!(matches!(
+        &test.activate("term:query:ls", "1")[..],
+        [Effect::Run { run: Run::Copy(text), .. }] if text == "ls"
+    ));
+}

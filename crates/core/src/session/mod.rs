@@ -115,16 +115,15 @@ enum Ref<'a> {
 impl<'a> Ref<'a> {
     fn parse(item_ref: &'a str) -> Option<Ref<'a>> {
         let end = item_ref.find(['/', ':'])?;
-        let plugin = &item_ref[..end];
-        let rest = &item_ref[end + 1..];
-        if item_ref[end..].starts_with('/') {
-            return Some(Ref::Item { plugin, item: rest });
+        let (plugin, rest) = (&item_ref[..end], &item_ref[end + 1..]);
+        match (item_ref.as_bytes()[end], rest) {
+            (b'/', item) => Some(Ref::Item { plugin, item }),
+            (_, "mode") => Some(Ref::Hint { plugin }),
+            (_, rest) => Some(Ref::QueryItem {
+                plugin,
+                text: rest.strip_prefix("query:")?,
+            }),
         }
-        if rest == "mode" {
-            return Some(Ref::Hint { plugin });
-        }
-        let text = rest.strip_prefix("query:")?;
-        Some(Ref::QueryItem { plugin, text })
     }
 }
 
@@ -400,8 +399,12 @@ impl Session {
         match selected.or_else(first) {
             Some(plugin) => self.enter_mode(plugin),
             None => {
+                let named = match item {
+                    Some(item) => format!("{item:?} names no mode hint"),
+                    None => "no item is selected".to_owned(),
+                };
                 self.log.write(format_args!(
-                    "nothing to complete: {item:?} is no mode hint and none is shown"
+                    "nothing to complete: {named}, and the state shows no hint"
                 ));
                 Vec::new()
             }
@@ -590,7 +593,9 @@ impl Session {
     /// the session holds but doesn't show (the newest text filtered it out)
     /// no longer does. A `[query_item]` resolves while its mode is active,
     /// filled in with the text its ref recorded, even if newer input has
-    /// changed the query since (*Items*).
+    /// changed the query since (*Items*). That includes while the dedupe
+    /// rule hides it: the ref still names what the user saw, and running
+    /// it does what the listed item with that label would.
     fn resolve(&self, item_ref: &str) -> Option<Target> {
         let wanted = Ref::parse(item_ref)?;
         if let Ref::QueryItem { plugin, text } = wanted {
@@ -972,19 +977,20 @@ fn frontend_item(item_ref: String, plugin: &Plugin, item: &Item) -> FrontendItem
 }
 
 /// The hint for entering `plugin`'s mode (*Mode hints*). Its detail is the
-/// prefixes, separated by spaces, then ` · ` and the description when
-/// there is one.
+/// prefixes, separated by spaces, and the description, joined by ` · `
+/// when it has both, or `None` when it has neither (conflicts can leave a
+/// plugin without prefixes).
 fn hint_item(plugin: &Plugin) -> FrontendItem {
     let manifest = &plugin.manifest;
-    let mut detail = plugin.prefixes.join(" ");
-    if let Some(description) = &manifest.description {
-        detail.push_str(" · ");
-        detail.push_str(description);
-    }
+    let prefixes = Some(plugin.prefixes.join(" ")).filter(|prefixes| !prefixes.is_empty());
+    let detail = match (prefixes, &manifest.description) {
+        (Some(prefixes), Some(description)) => Some(format!("{prefixes} · {description}")),
+        (prefixes, description) => prefixes.or_else(|| description.clone()),
+    };
     FrontendItem {
         item_ref: format!("{}:mode", plugin.id()),
         label: manifest.name.clone(),
-        detail: Some(detail),
+        detail,
         icon: manifest.icon.clone(),
         badge: None,
         disabled: false,
