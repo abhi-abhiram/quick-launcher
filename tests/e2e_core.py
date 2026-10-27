@@ -176,6 +176,84 @@ class PlainSearch(Core):
         self.assertEqual(client.finish(), 0)
 
 
+class Modes(Core):
+    def setUp(self):
+        super().setUp()
+        self.add_plugin("alpha", "list", "global = true")
+        self.add_plugin("hidden", "list")
+        self.add_plugin("stream", "stream", 'kind = "query"')
+
+    def state_for(self, client, seq):
+        """The settled state answering the `input` with this seq."""
+        return client.wait_for(lambda m: m["type"] == "state" and m["seq"] >= seq and not m["loading"])
+
+    def test_a_prefix_enters_a_list_mode_and_leave_mode_leaves_it(self):
+        client = self.ready()
+        client.open()
+        client.settled_state()
+
+        client.input("hidden:")
+        state = self.state_for(client, 1)
+        self.assertEqual(state["mode"], {"id": "hidden", "name": "Hidden"})
+        self.assertEqual(state["text"], "")
+        self.assertEqual(refs(state), ["hidden/one", "hidden/two"])
+        self.assertEqual(client.mode, "hidden")
+
+        client.input("tw")  # read in the mode
+        state = self.state_for(client, 2)
+        self.assertEqual(state["mode"]["id"], "hidden")
+        self.assertEqual(refs(state), ["hidden/two"])
+
+        client.input("")
+        self.state_for(client, 3)
+        client.send("leave_mode")
+        state = client.wait_for(lambda m: m["type"] == "state")
+        self.assertIsNone(state["mode"])
+        self.assertEqual(state["text"], "hidden")
+        self.assertEqual(state["seq"], 3)
+        self.assertIsNone(client.mode)
+
+        client.input("hidden:")
+        self.state_for(client, 4)
+        client.activate("hidden/one", "copy")
+        self.assertEqual(client.wait_for(lambda m: m["type"] == "done")["type"], "done")
+        self.assertEqual(self.calls(), [{"copy": "one"}])
+
+    def test_typing_faster_than_the_core_reads_the_prefix_once(self):
+        client = self.ready()
+        client.open()
+        client.settled_state()
+        client.input("hidden:")
+        client.input("hidden:t")  # still mode null: no state was read yet
+        state = self.state_for(client, 2)
+        self.assertEqual(state["mode"]["id"], "hidden")
+        self.assertEqual(state["text"], "t")
+        self.assertEqual(refs(state), ["hidden/two"])
+
+    def test_open_straight_into_a_mode(self):
+        client = self.ready()
+        client.open("hidden")
+        state = client.settled_state()
+        self.assertEqual(state["mode"]["id"], "hidden")
+        self.assertEqual(refs(state), ["hidden/one", "hidden/two"])
+        client.send("leave_mode")
+        # alpha's answer may still come first, with a state in the mode.
+        state = client.wait_for(lambda m: m["type"] == "state" and m["mode"] is None)
+        self.assertEqual(state["text"], "hidden")
+
+    def test_a_query_mode_asks_on_every_input(self):
+        client = self.ready()
+        client.open()
+        client.settled_state()
+        client.input("stream: 1")
+        state = self.state_for(client, 1)
+        self.assertEqual(state["mode"]["id"], "stream")
+        self.assertEqual(state["text"], "1")
+        self.assertEqual(refs(state), ["stream/1", "stream/2"])
+        client.input("0")
+        self.assertEqual(refs(self.state_for(client, 2)), ["stream/1"])
+
+
 class Versions(Core):
     def test_a_version_mismatch_gets_ready_then_eof_and_a_failure(self):
         client = self.start()
@@ -220,6 +298,8 @@ class Shutdown(Core):
         started = time.monotonic()
         self.assertEqual(client.finish(timeout=5), 0)
         self.assertLess(time.monotonic() - started, 3)
+        # The rest is Linux only: `running` reads /proc, and elsewhere it
+        # would pass without checking anything.
         if not sys.platform.startswith("linux"):
             self.skipTest("checking that the plugin is gone reads /proc")
         deadline = time.monotonic() + 5

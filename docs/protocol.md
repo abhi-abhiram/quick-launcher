@@ -109,7 +109,7 @@ are given in parentheses as examples; another frontend picks its own.
 
 | type         | fields | meaning |
 |--------------|--------|---------|
-| `hello`      | `client` (string), `client_version` (string), `max_items` (int, optional, default 50) | First message; its `v` is the major the frontend speaks. `client` and `client_version` name the frontend build, for logs only; the core MUST NOT behave differently because of them. `max_items` caps `items` in every `state`. The core replies `ready`. |
+| `hello`      | `client` (string), `client_version` (string), `max_items` (int, optional, default 50) | First message; its `v` is the major the frontend speaks. `client` and `client_version` name the frontend build, for logs only; the core MUST NOT behave differently because of them. `max_items` caps `items` in every `state`; it SHOULD be at least 1, and the core treats `0` as the default. The core replies `ready`. |
 | `open`       | `mode` (optional plugin id) | A session starts (window shown), optionally straight into a mode. The core resets to that mode (or none) with empty text, refreshes list plugins as needed, and sends `state`. |
 | `input`      | `seq` (int), `mode` (plugin id or `null`), `text` (string) | The typed text changed. `mode` is the mode the frontend is showing with its text (`null` before the first `state`), and `text` is all the text typed in that mode, without its prefix. `seq` increases with every `input`. See [Reading input as the user saw it](#reading-input-as-the-user-saw-it). |
 | `leave_mode` | — | Leave the active mode. The core puts the prefix the user typed to enter it (the mode's first prefix if it was entered another way), minus its last character, back into the text, as if the user had deleted the `:`. Does nothing without an active mode. (Backspace on empty text.) |
@@ -141,7 +141,7 @@ know.
 
 ```json
 {"v":1,"type":"state","seq":12,
- "mode":{"id":"pi","name":"pi","icon":"π","placeholder":"Open pi in…"},
+ "mode":{"id":"pi","name":"pi","icon":{"glyph":"π"},"placeholder":"Open pi in…"},
  "text":"launch","loading":false,"error":null,
  "items":[ ... ]}
 ```
@@ -149,7 +149,7 @@ know.
 | field     | meaning |
 |-----------|---------|
 | `seq`     | The newest `input` the core has applied. |
-| `mode`    | The active mode, or `null` for the plain search. |
+| `mode`    | The active mode, or `null` for the plain search: `id`, `name`, and when the manifest sets them, `icon` (an explicit object, as in [Frontend items](#frontend-items)) and `placeholder`. |
 | `text`    | The typed text, as typed, after the prefix. Differs from what the frontend sent when the core changed mode, e.g. typing `pi:launch` gives mode `pi` and text `launch` (whitespace right after a prefix is dropped). See [The query](#the-query). |
 | `loading` | A plugin request for this mode and text is still outstanding. |
 | `error`   | A one-line, user-readable message, or `null`. Drawn alongside `items`, never instead of them. |
@@ -375,7 +375,8 @@ Unknown keys MUST be ignored, so newer manifests load in older cores.
   A list plugin with `global = true` is also asked for its items when the
   launcher opens, and the core searches them in the plain search, not only in
   the plugin's mode. `apps` is global.
-- **`query`**: the core sends a `query` request on every keystroke, and the
+- **`query`**: the core sends a `query` request on every keystroke that
+  changes the [query](#the-query) (and when the mode is entered), and the
   plugin returns items for that text, already filtered and ranked. Use this
   when the items depend on the text (calculator, web search, file search over
   a large tree). Query plugins SHOULD be `persistent`.

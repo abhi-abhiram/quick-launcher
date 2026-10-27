@@ -10,9 +10,19 @@ use crate::log::Lines;
 
 /// A plugin with `extra` added to a minimal manifest.
 fn plugin(id: &str, extra: &str) -> Plugin {
+    with_prefixes(id, &[&format!("{id}:")], extra)
+}
+
+/// A plugin with these prefixes and `extra` added to a minimal manifest.
+fn with_prefixes(id: &str, prefixes: &[&str], extra: &str) -> Plugin {
+    let prefixes: Vec<String> = prefixes
+        .iter()
+        .map(|prefix| format!("{prefix:?}"))
+        .collect();
     let manifest = Manifest::parse(&format!(
-        "protocol = 1\nid = \"{id}\"\nname = \"{}\"\nprefixes = [\"{id}:\"]\nbin = \"bin\"\n{extra}",
-        id.to_uppercase()
+        "protocol = 1\nid = \"{id}\"\nname = \"{}\"\nprefixes = [{}]\nbin = \"bin\"\n{extra}",
+        id.to_uppercase(),
+        prefixes.join(", ")
     ))
     .unwrap();
     Plugin {
@@ -95,6 +105,15 @@ impl Test {
             mode: None,
             text: text.into(),
         }))
+    }
+
+    /// Sends `input` read in `mode`, returning every effect.
+    fn input_in(&mut self, seq: u64, mode: Option<&str>, text: &str) -> Vec<Effect> {
+        self.send(Incoming::Input {
+            seq,
+            mode: mode.map(Into::into),
+            text: text.into(),
+        })
     }
 
     fn activate(&mut self, item: &str, action: &str) -> Vec<Effect> {
@@ -619,38 +638,6 @@ fn an_invalid_hello_gets_ready_then_exits() {
 }
 
 #[test]
-fn open_with_a_mode_is_the_plain_search_for_now() {
-    let mut test = Test::new(vec![global("apps"), plugin("pi", "")]);
-    let effects = test.send(Incoming::Open {
-        mode: Some("pi".into()),
-    });
-    let asked: Vec<&str> = effects
-        .iter()
-        .filter_map(|effect| match effect {
-            Effect::Request { plugin, .. } => Some(plugin.id()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(asked, ["apps"]);
-    assert_eq!(last_state(&effects).mode, None);
-    assert!(test.lines.get().iter().any(|line| line.contains("\"pi\"")));
-}
-
-#[test]
-fn input_in_a_mode_is_read_as_the_plain_search_for_now() {
-    let mut test = Test::new(vec![global("apps"), plugin("pi", "")]);
-    let [apps] = test.open()[..] else { panic!() };
-    test.items(apps, vec![copy("a", "Alpha"), copy("b", "Beta")]);
-    let state = only_state(test.send(Incoming::Input {
-        seq: 1,
-        mode: Some("pi".into()),
-        text: "alp".into(),
-    }));
-    assert_eq!(state.mode, None);
-    assert_eq!(refs(&state), ["apps/a"]);
-}
-
-#[test]
 fn a_refresh_clears_the_old_error_while_it_asks_again() {
     let mut test = Test::new(vec![global("apps"), global("files")]);
     let [apps, files] = test.open()[..] else {
@@ -679,4 +666,554 @@ fn a_refresh_after_a_failed_action_clears_its_error() {
     test.activate("apps/a", "0");
     let state = last_state(&test.session.handle(Event::Ran(Ok(()))));
     assert_eq!(state.error, None);
+}
+
+// Modes (M9).
+
+/// The (plugin, method) of every request in `effects`.
+fn requests(effects: &[Effect]) -> Vec<(&str, &Method)> {
+    effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::Request { plugin, request } => Some((plugin.id(), &request.method)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn request_id(effects: &[Effect], plugin_id: &str) -> u64 {
+    effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::Request { plugin, request } if plugin.id() == plugin_id => Some(request.id),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no request to {plugin_id} in {effects:?}"))
+}
+
+fn query(text: &str) -> Method {
+    Method::Query(QueryParams { text: text.into() })
+}
+
+fn mode_id(state: &State) -> Option<&str> {
+    state.mode.as_ref().map(|mode| mode.id.as_str())
+}
+
+fn scored(id: &str, score: Option<f64>) -> Item {
+    let mut item = copy(id, id);
+    item.score = score;
+    item
+}
+
+/// `apps` (global), `pi` (a list mode) and `calc` (a query mode).
+fn modes() -> Test {
+    Test::new(vec![
+        global("apps"),
+        plugin(
+            "pi",
+            "icon = \"π\"\nplaceholder = \"Open pi in…\"\ndescription = \"Projects\"",
+        ),
+        plugin("calc", "kind = \"query\""),
+    ])
+}
+
+#[test]
+fn a_prefix_enters_its_mode_and_asks_for_its_list() {
+    let mut test = modes();
+    test.open();
+    let effects = test.input_in(1, None, "pi:");
+    assert_eq!(requests(&effects), [("pi", &Method::list())]);
+    let state = last_state(&effects);
+    assert_eq!(
+        state.mode,
+        Some(Mode {
+            id: "pi".into(),
+            name: "PI".into(),
+            icon: Some(Icon::Glyph("π".into())),
+            placeholder: Some("Open pi in…".into()),
+        })
+    );
+    assert_eq!(state.text, "");
+    assert!(state.loading);
+    assert_eq!(state.items, []);
+    let pi = request_id(&effects, "pi");
+    let state = test.items(
+        pi,
+        vec![copy("ql", "quick-launcher"), copy("dots", "dotfiles")],
+    );
+    assert_eq!(refs(&state), ["pi/ql", "pi/dots"]);
+    assert!(!state.loading);
+}
+
+#[test]
+fn pi_colon_then_pi_colon_l_both_with_mode_null_enter_pi_once() {
+    // The spec's example: both are typed before any reply, so the frontend
+    // sends both with `mode: null`.
+    let mut test = modes();
+    test.open();
+    let first = test.input_in(1, None, "pi:");
+    let second = test.input_in(2, None, "pi:l");
+    assert_eq!(mode_id(&last_state(&first)), Some("pi"));
+    assert_eq!(requests(&second), [], "pi is already being asked");
+    let state = last_state(&second);
+    assert_eq!(mode_id(&state), Some("pi"));
+    assert_eq!(state.text, "l");
+    assert_eq!(state.seq, 2);
+}
+
+#[test]
+fn prefixes_match_without_case_and_drop_whitespace_after_them() {
+    let mut test = modes();
+    test.open();
+    let state = last_state(&test.input_in(1, None, "PI:  launch "));
+    assert_eq!(mode_id(&state), Some("pi"));
+    assert_eq!(state.text, "launch ", "trailing whitespace is kept");
+}
+
+#[test]
+fn the_longest_matching_prefix_wins() {
+    let mut test = Test::new(vec![
+        with_prefixes("term", &[">"], ""),
+        with_prefixes("root", &[">>"], ""),
+    ]);
+    test.open();
+    let state = last_state(&test.input_in(1, None, ">>ls"));
+    assert_eq!(mode_id(&state), Some("root"));
+    assert_eq!(state.text, "ls");
+    let state = last_state(&test.input_in(2, None, "> ls"));
+    assert_eq!(mode_id(&state), Some("term"));
+    assert_eq!(state.text, "ls");
+}
+
+#[test]
+fn text_without_a_prefix_is_the_plain_search() {
+    let mut test = modes();
+    test.open();
+    let state = last_state(&test.input_in(1, None, "pi"));
+    assert_eq!(state.mode, None);
+    assert_eq!(state.text, "pi");
+    let state = last_state(&test.input_in(2, None, " pi:"));
+    assert_eq!(state.mode, None, "a prefix only counts at the start");
+}
+
+#[test]
+fn another_modes_prefix_inside_a_mode_is_search_text() {
+    let mut test = modes();
+    test.open();
+    test.input_in(1, None, "pi:");
+    let effects = test.input_in(2, Some("pi"), "calc:2");
+    assert_eq!(requests(&effects), []);
+    let state = last_state(&effects);
+    assert_eq!(mode_id(&state), Some("pi"));
+    assert_eq!(state.text, "calc:2");
+}
+
+#[test]
+fn input_switches_to_the_frontends_mode_first() {
+    // The frontend shows pi (say, from a state the core has since moved on
+    // from) and the core is in the plain search: read the text in pi.
+    let mut test = modes();
+    let [apps] = test.open()[..] else { panic!() };
+    test.items(apps, vec![copy("a", "Alpha")]);
+    let effects = test.input_in(1, Some("pi"), "alp");
+    assert_eq!(requests(&effects), [("pi", &Method::list())]);
+    let state = last_state(&effects);
+    assert_eq!(mode_id(&state), Some("pi"));
+    assert_eq!(state.text, "alp");
+    assert_eq!(refs(&state), [] as [&str; 0], "apps' items aren't pi's");
+
+    // And back: the frontend shows the plain search again.
+    let state = last_state(&test.input_in(2, None, "alp"));
+    assert_eq!(state.mode, None);
+    assert_eq!(refs(&state), ["apps/a"]);
+}
+
+#[test]
+fn an_unknown_mode_is_read_as_the_plain_search() {
+    let mut test = modes();
+    test.open();
+    let state = last_state(&test.input_in(1, Some("gone"), "pi:x"));
+    assert_eq!(mode_id(&state), Some("pi"));
+    assert_eq!(state.text, "x");
+    assert!(
+        test.lines
+            .get()
+            .iter()
+            .any(|line| line.contains("\"gone\""))
+    );
+}
+
+#[test]
+fn a_list_mode_filters_only_its_own_items() {
+    let mut test = modes();
+    let [apps] = test.open()[..] else { panic!() };
+    test.items(apps, vec![copy("ql-app", "quick launcher app")]);
+    let pi = request_id(&test.input_in(1, None, "pi:"), "pi");
+    test.items(
+        pi,
+        vec![copy("dots", "dotfiles"), copy("ql", "quick-launcher")],
+    );
+    let state = last_state(&test.input_in(2, Some("pi"), "quick"));
+    assert_eq!(refs(&state), ["pi/ql"]);
+}
+
+#[test]
+fn the_plain_search_keeps_global_items_while_in_a_mode() {
+    let mut test = modes();
+    let [apps] = test.open()[..] else { panic!() };
+    test.input_in(1, None, "pi:");
+    // apps answers while pi is shown: its items wait for the plain search.
+    let state = test.items(apps, vec![copy("a", "Pine")]);
+    assert_eq!(mode_id(&state), Some("pi"));
+    assert_eq!(refs(&state), [] as [&str; 0]);
+    assert!(state.loading, "pi hasn't answered");
+    let state = last_state(&test.send(Incoming::LeaveMode));
+    assert_eq!(refs(&state), ["apps/a"]);
+}
+
+#[test]
+fn errors_and_loading_are_the_shown_plugins() {
+    let mut test = modes();
+    let [apps] = test.open()[..] else { panic!() };
+    test.answer(apps, Answer::Failed(Failure::Plugin("broken".into())));
+    let effects = test.input_in(1, None, "pi:");
+    let state = last_state(&effects);
+    assert_eq!(state.error, None, "apps' error isn't pi's");
+    let pi = request_id(&effects, "pi");
+    let state = only_state(test.answer(pi, Answer::Failed(Failure::Plugin("no projects".into()))));
+    assert_eq!(state.error.as_deref(), Some("PI: no projects"));
+    let state = last_state(&test.send(Incoming::LeaveMode));
+    assert_eq!(state.error.as_deref(), Some("APPS: broken"));
+}
+
+#[test]
+fn a_query_mode_asks_on_every_input_and_cancels_the_last_request() {
+    let mut test = modes();
+    test.open();
+    let effects = test.input_in(1, None, "calc: 2*");
+    assert_eq!(requests(&effects), [("calc", &query("2*"))]);
+    let first = request_id(&effects, "calc");
+    assert!(last_state(&effects).loading);
+
+    let effects = test.input_in(2, Some("calc"), "2*21 ");
+    let second = request_id(&effects, "calc");
+    assert_eq!(effects[0], Effect::Cancel(first));
+    assert_eq!(requests(&effects), [("calc", &query("2*21"))]);
+
+    // The same query (only whitespace changed) isn't asked again.
+    let effects = test.input_in(3, Some("calc"), " 2*21");
+    assert_eq!(requests(&effects), []);
+    assert_eq!(last_state(&effects).text, " 2*21");
+
+    // A superseded answer is ignored; the newest one is shown.
+    assert_eq!(test.items_effects(first, vec![scored("old", None)]), []);
+    let state = test.items(second, vec![scored("42", None)]);
+    assert_eq!(refs(&state), ["calc/42"]);
+}
+
+#[test]
+fn query_items_are_shown_as_given_sorted_by_score() {
+    let mut test = modes();
+    test.open();
+    let calc = request_id(&test.input_in(1, None, "calc:x"), "calc");
+    let state = test.items(
+        calc,
+        vec![
+            scored("none-1", None),
+            scored("low", Some(0.1)),
+            scored("high", Some(0.9)),
+            scored("none-2", None),
+            scored("mid", Some(0.5)),
+        ],
+    );
+    assert_eq!(
+        refs(&state),
+        [
+            "calc/high",
+            "calc/mid",
+            "calc/low",
+            "calc/none-1",
+            "calc/none-2"
+        ],
+        "the text doesn't filter them"
+    );
+}
+
+#[test]
+fn leaving_a_query_mode_cancels_its_request() {
+    let mut test = modes();
+    test.open();
+    let calc = request_id(&test.input_in(1, None, "calc:1"), "calc");
+    let effects = test.send(Incoming::LeaveMode);
+    assert_eq!(effects[0], Effect::Cancel(calc));
+    let state = last_state(&effects);
+    assert_eq!(state.mode, None);
+    assert_eq!(state.text, "calc1");
+}
+
+#[test]
+fn leave_mode_after_entering_by_prefix_puts_back_that_prefix_less_its_last_character() {
+    let mut test = Test::new(vec![
+        global("apps"),
+        with_prefixes("term", &[">", "term:"], ""),
+    ]);
+    test.open();
+    test.input_in(1, None, "TERM:");
+    let state = last_state(&test.send(Incoming::LeaveMode));
+    assert_eq!(state.mode, None);
+    assert_eq!(state.text, "TERM", "as the user typed it");
+
+    test.input_in(2, None, ">");
+    let state = last_state(&test.send(Incoming::LeaveMode));
+    assert_eq!(state.text, "");
+}
+
+#[test]
+fn leave_mode_after_open_puts_back_the_first_prefix_less_its_last_character() {
+    let mut test = modes();
+    let effects = test.send(Incoming::Open {
+        mode: Some("pi".into()),
+    });
+    let state = last_state(&effects);
+    assert_eq!(mode_id(&state), Some("pi"));
+    let state = last_state(&test.send(Incoming::LeaveMode));
+    assert_eq!(state.mode, None);
+    assert_eq!(state.text, "pi");
+}
+
+#[test]
+fn leave_mode_after_the_frontend_switched_mode_uses_the_first_prefix() {
+    let mut test = modes();
+    test.open();
+    test.input_in(1, None, "PI:");
+    // The frontend then reads pi itself: the user still entered it by typing.
+    test.input_in(2, Some("pi"), "x");
+    let state = last_state(&test.send(Incoming::LeaveMode));
+    assert_eq!(state.text, "PIx");
+
+    test.input_in(3, Some("pi"), "");
+    let state = last_state(&test.send(Incoming::LeaveMode));
+    assert_eq!(
+        state.text, "pi",
+        "entered by the frontend's mode, not a prefix"
+    );
+}
+
+#[test]
+fn the_state_answering_leave_mode_carries_the_last_seq() {
+    let mut test = modes();
+    test.open();
+    test.input_in(7, None, "pi:");
+    let state = last_state(&test.send(Incoming::LeaveMode));
+    assert_eq!(state.seq, 7);
+}
+
+#[test]
+fn leave_mode_without_a_mode_does_nothing() {
+    let mut test = modes();
+    test.open();
+    test.input_in(1, None, "pi");
+    assert_eq!(test.send(Incoming::LeaveMode), []);
+}
+
+#[test]
+fn open_with_a_mode_asks_the_global_plugins_and_the_modes() {
+    let mut test = modes();
+    let effects = test.send(Incoming::Open {
+        mode: Some("pi".into()),
+    });
+    assert_eq!(
+        requests(&effects),
+        [("apps", &Method::list()), ("pi", &Method::list())]
+    );
+    let state = last_state(&effects);
+    assert_eq!(mode_id(&state), Some("pi"));
+    assert_eq!(state.text, "");
+
+    let effects = test.send(Incoming::Open {
+        mode: Some("calc".into()),
+    });
+    assert_eq!(
+        requests(&effects),
+        [("apps", &Method::list()), ("calc", &query(""))]
+    );
+}
+
+#[test]
+fn open_without_a_mode_leaves_the_mode() {
+    let mut test = modes();
+    test.open();
+    test.input_in(1, None, "pi:x");
+    let state = last_state(&test.send(Incoming::Open { mode: None }));
+    assert_eq!(state.mode, None);
+    assert_eq!(state.text, "");
+}
+
+#[test]
+fn open_with_an_unknown_mode_is_the_plain_search() {
+    let mut test = modes();
+    let state = last_state(&test.send(Incoming::Open {
+        mode: Some("gone".into()),
+    }));
+    assert_eq!(state.mode, None);
+    assert!(
+        test.lines
+            .get()
+            .iter()
+            .any(|line| line.contains("\"gone\""))
+    );
+}
+
+#[test]
+fn a_global_plugin_is_also_a_mode() {
+    let mut test = Test::new(vec![global("apps")]);
+    let [apps] = test.open()[..] else { panic!() };
+    // Entering while its request is out doesn't ask again.
+    let effects = test.input_in(1, None, "apps:");
+    assert_eq!(requests(&effects), []);
+    test.items(apps, vec![copy("a", "Alpha")]);
+    let state = last_state(&test.input_in(2, Some("apps"), "al"));
+    assert_eq!(refs(&state), ["apps/a"]);
+    // Leaving doesn't cancel anything the plain search needs.
+    let state = last_state(&test.send(Incoming::LeaveMode));
+    assert_eq!(state.text, "appsal");
+}
+
+#[test]
+fn reentering_a_list_mode_asks_again_and_keeps_its_items_meanwhile() {
+    let mut test = modes();
+    test.open();
+    let pi = request_id(&test.input_in(1, None, "pi:"), "pi");
+    test.items(pi, vec![copy("ql", "quick-launcher")]);
+    test.send(Incoming::LeaveMode);
+    let effects = test.input_in(2, None, "pi:");
+    assert_eq!(requests(&effects), [("pi", &Method::list())]);
+    let state = last_state(&effects);
+    assert!(state.loading);
+    assert_eq!(refs(&state), ["pi/ql"]);
+}
+
+#[test]
+fn a_refresh_in_a_mode_asks_only_the_mode_again() {
+    let mut test = modes();
+    test.open();
+    let calc = request_id(&test.input_in(1, None, "calc:1+1"), "calc");
+    let mut item = copy("2", "2");
+    item.actions[0].after = After::Refresh;
+    test.items(calc, vec![item]);
+    test.activate("calc/2", "0");
+    let effects = test.session.handle(Event::Ran(Ok(())));
+    assert_eq!(requests(&effects), [("calc", &query("1+1"))]);
+}
+
+#[test]
+fn activating_works_in_a_mode() {
+    let mut test = modes();
+    test.open();
+    let pi = request_id(&test.input_in(1, None, "pi:"), "pi");
+    test.items(pi, vec![copy("ql", "quick-launcher")]);
+    assert!(matches!(
+        &test.activate("pi/ql", "0")[..],
+        [Effect::Run { .. }]
+    ));
+}
+
+#[test]
+fn an_item_the_newest_text_filtered_out_cannot_be_activated() {
+    let mut test = Test::new(vec![global("apps")]);
+    let [apps] = test.open()[..] else { panic!() };
+    test.items(apps, vec![copy("a", "Alpha"), copy("b", "Beta")]);
+    let state = test.input(1, "alp");
+    assert_eq!(refs(&state), ["apps/a"]);
+    let state = only_state(test.activate("apps/b", "0"));
+    assert_eq!(refs(&state), ["apps/a"]);
+}
+
+#[test]
+fn an_item_past_max_items_cannot_be_activated() {
+    let mut test = Test::new(vec![global("apps")]);
+    test.send(Incoming::Hello {
+        v: 1,
+        client: String::new(),
+        client_version: String::new(),
+        max_items: 1,
+    });
+    let [apps] = test.open()[..] else { panic!() };
+    test.items(apps, vec![copy("a", "A"), copy("b", "B")]);
+    let state = only_state(test.activate("apps/b", "0"));
+    assert_eq!(refs(&state), ["apps/a"]);
+    assert!(
+        test.lines
+            .get()
+            .iter()
+            .any(|line| line.contains("can't activate \"apps/b\""))
+    );
+}
+
+#[test]
+fn max_items_zero_uses_the_default() {
+    let mut test = Test::new(vec![global("apps")]);
+    test.send(Incoming::Hello {
+        v: 1,
+        client: String::new(),
+        client_version: String::new(),
+        max_items: 0,
+    });
+    let [apps] = test.open()[..] else { panic!() };
+    let items = (0..3).map(|n| copy(&n.to_string(), "Item")).collect();
+    assert_eq!(test.items(apps, items).items.len(), 3);
+    assert!(
+        test.lines
+            .get()
+            .iter()
+            .any(|line| line.contains("max_items 0"))
+    );
+}
+
+#[test]
+fn a_rescan_leaves_the_mode() {
+    let mut test = modes();
+    test.open();
+    test.input_in(1, None, "calc:1");
+    test.session.handle(Event::Plugins(vec![global("apps")]));
+    // Nothing indexes into the old plugins, even before the next open.
+    let state = last_state(&test.input_in(2, None, "x"));
+    assert_eq!(state.mode, None);
+}
+
+#[test]
+fn switching_from_one_mode_to_another_cancels_the_old_ones_request() {
+    let mut test = modes();
+    test.open();
+    let pi = request_id(&test.input_in(1, None, "pi:"), "pi");
+    // The frontend shows calc now (say, the user left pi and typed `calc:`).
+    let effects = test.input_in(2, Some("calc"), "1");
+    assert_eq!(effects[0], Effect::Cancel(pi));
+    assert_eq!(requests(&effects), [("calc", &query("1"))]);
+    assert_eq!(mode_id(&last_state(&effects)), Some("calc"));
+    assert_eq!(test.items_effects(pi, vec![copy("ql", "ql")]), []);
+}
+
+#[test]
+fn prefixes_and_leave_mode_work_on_characters_not_bytes() {
+    let mut test = Test::new(vec![with_prefixes("pi", &["π:"], "")]);
+    test.open();
+    let state = last_state(&test.input_in(1, None, "π"));
+    assert_eq!(state.mode, None, "text shorter than the prefix");
+    let state = last_state(&test.input_in(2, None, "π:ab"));
+    assert_eq!(mode_id(&state), Some("pi"));
+    assert_eq!(state.text, "ab");
+    test.input_in(3, Some("pi"), "");
+    let state = last_state(&test.send(Incoming::LeaveMode));
+    assert_eq!(state.text, "π");
+}
+
+#[test]
+fn reentering_a_query_mode_asks_again_even_for_the_same_query() {
+    let mut test = modes();
+    test.open();
+    test.input_in(1, None, "calc:1");
+    test.send(Incoming::LeaveMode);
+    let effects = test.input_in(2, None, "calc:1");
+    assert_eq!(requests(&effects), [("calc", &query("1"))]);
 }

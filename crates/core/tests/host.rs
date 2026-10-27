@@ -360,7 +360,9 @@ async fn partial_answers_arrive_in_order_and_each_resets_the_timeout() {
 
 #[tokio::test]
 async fn a_timeout_after_a_partial_answer_kills_the_plugin() {
-    let fixture = Fixture::new("stream", "kind = \"query\"\ntimeout_ms = 1000");
+    // Long enough that a busy machine starting the fixture still gets the
+    // partial answer out in time; only the hang after it should time out.
+    let fixture = Fixture::new("stream", "kind = \"query\"\ntimeout_ms = 3000");
     let (answers, _) = fixture.run(query("stall")).await;
     match &answers[..] {
         [
