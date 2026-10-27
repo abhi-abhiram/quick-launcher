@@ -194,7 +194,7 @@ class Modes(Core):
 
         client.input("hidden:")
         state = self.state_for(client, 1)
-        self.assertEqual(state["mode"], {"id": "hidden", "name": "Hidden", "icon": None, "placeholder": None})
+        self.assertEqual(state["mode"], {"id": "hidden", "name": "Hidden"})
         self.assertEqual(state["text"], "")
         self.assertEqual(refs(state), ["hidden/one", "hidden/two"])
         self.assertEqual(client.mode, "hidden")

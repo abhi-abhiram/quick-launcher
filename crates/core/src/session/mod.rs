@@ -98,7 +98,8 @@ pub struct Session {
     /// The typed text after the prefix, as typed.
     text: String,
     /// One per global list plugin, plus the active mode's (and a mode's
-    /// left this session), in discovery order.
+    /// left this session). Sorted by `plugin`, i.e. in discovery order,
+    /// which [`Session::source_index`] relies on.
     sources: Vec<Source>,
     running: Option<Running>,
     /// Why the last action couldn't run, until the next input.
@@ -186,7 +187,7 @@ impl Session {
                 let mut effects = self.end();
                 self.text.clear();
                 self.mode = mode.and_then(|id| self.mode_named(&id, "opening the plain search"));
-                effects.extend(self.refresh());
+                effects.extend(self.ask_all());
                 effects.push(self.state());
                 effects
             }
@@ -254,7 +255,7 @@ impl Session {
                 }
                 After::Refresh => {
                     self.action_error = None;
-                    let mut effects = self.refresh();
+                    let mut effects = self.ask_shown();
                     effects.push(self.state());
                     effects
                 }
@@ -384,17 +385,14 @@ impl Session {
         };
         let plugin = active.plugin;
         match self.plugins[plugin].manifest.kind {
-            Kind::List => {
-                let pending = self
+            Kind::List
+                if self
                     .source(plugin)
-                    .is_some_and(|source| source.pending.is_some());
-                if pending {
-                    Vec::new()
-                } else {
-                    self.request(plugin, Method::list())
-                }
+                    .is_some_and(|source| source.pending.is_some()) =>
+            {
+                Vec::new()
             }
-            Kind::Query => self.request(plugin, self.query_method()),
+            _ => self.ask(plugin),
         }
     }
 
@@ -470,12 +468,14 @@ impl Session {
     /// newest text filtered it out) no longer resolves.
     fn resolve(&self, item_ref: &str) -> Option<(&Plugin, &Item)> {
         let (plugin_id, item_id) = item_ref.split_once('/')?;
-        self.visible().into_iter().find_map(|(source, index)| {
-            let source = &self.sources[source];
-            let plugin = &self.plugins[source.plugin];
-            let item = &source.items[index];
-            (plugin.id() == plugin_id && item.id == item_id).then_some((plugin, item))
-        })
+        self.visible(&self.shown())
+            .into_iter()
+            .find_map(|(source, index)| {
+                let source = &self.sources[source];
+                let plugin = &self.plugins[source.plugin];
+                let item = &source.items[index];
+                (plugin.id() == plugin_id && item.id == item_id).then_some((plugin, item))
+            })
     }
 
     /// Ends the session: outstanding requests are cancelled and the
@@ -499,21 +499,41 @@ impl Session {
     }
 
     /// Asks every global list plugin and the active mode's plugin for
-    /// their items, keeping what each one gave before until it answers.
-    fn refresh(&mut self) -> Vec<Effect> {
+    /// their items, as `open` does.
+    fn ask_all(&mut self) -> Vec<Effect> {
         let mode = self.mode.as_ref().map(|active| active.plugin);
-        let mut effects = Vec::new();
-        for plugin in 0..self.plugins.len() {
-            if is_global(&self.plugins[plugin]) {
-                effects.extend(self.request(plugin, Method::list()));
-            } else if Some(plugin) == mode {
-                effects.extend(match self.plugins[plugin].manifest.kind {
-                    Kind::List => self.request(plugin, Method::list()),
-                    Kind::Query => self.request(plugin, self.query_method()),
-                });
-            }
-        }
-        effects
+        let plugins: Vec<usize> = (0..self.plugins.len())
+            .filter(|&plugin| is_global(&self.plugins[plugin]) || Some(plugin) == mode)
+            .collect();
+        plugins
+            .into_iter()
+            .flat_map(|plugin| self.ask(plugin))
+            .collect()
+    }
+
+    /// Asks the plugins the state shows for their items again, as a
+    /// `refresh` does: the mode's, or in the plain search the global ones.
+    fn ask_shown(&mut self) -> Vec<Effect> {
+        let plugins: Vec<usize> = match &self.mode {
+            Some(active) => vec![active.plugin],
+            None => (0..self.plugins.len())
+                .filter(|&plugin| is_global(&self.plugins[plugin]))
+                .collect(),
+        };
+        plugins
+            .into_iter()
+            .flat_map(|plugin| self.ask(plugin))
+            .collect()
+    }
+
+    /// Asks `plugin` for its items: its list, or its items for the query.
+    /// What it gave before stays until it answers.
+    fn ask(&mut self, plugin: usize) -> Vec<Effect> {
+        let method = match self.plugins[plugin].manifest.kind {
+            Kind::List => Method::list(),
+            Kind::Query => self.query_method(),
+        };
+        self.request(plugin, method)
     }
 
     /// Sends `method` to `plugin`, cancelling its outstanding request. Its
@@ -521,10 +541,7 @@ impl Session {
     fn request(&mut self, plugin: usize, method: Method) -> Vec<Effect> {
         let id = self.next_request;
         self.next_request += 1;
-        let index = match self
-            .sources
-            .binary_search_by_key(&plugin, |source| source.plugin)
-        {
+        let index = match self.source_index(plugin) {
             Ok(index) => index,
             Err(index) => {
                 self.sources.insert(
@@ -561,8 +578,16 @@ impl Session {
         effects
     }
 
+    /// Where `plugin`'s source is in `sources`, or where it would go.
+    fn source_index(&self, plugin: usize) -> Result<usize, usize> {
+        self.sources
+            .binary_search_by_key(&plugin, |source| source.plugin)
+    }
+
     fn source(&self, plugin: usize) -> Option<&Source> {
-        self.sources.iter().find(|source| source.plugin == plugin)
+        self.source_index(plugin)
+            .ok()
+            .map(|index| &self.sources[index])
     }
 
     /// The sources the current state draws from, as indices into
@@ -580,11 +605,11 @@ impl Session {
             .collect()
     }
 
-    /// The items the current state shows, best first and at most
-    /// `max_items`, as (index into `sources`, index into its items).
-    fn visible(&self) -> Vec<(usize, usize)> {
+    /// The items the current state shows from the `shown` sources, best
+    /// first and at most `max_items`, as (index into `sources`, index into
+    /// its items).
+    fn visible(&self, shown: &[usize]) -> Vec<(usize, usize)> {
         let query = self.text.trim();
-        let shown = self.shown();
         let query_mode = self
             .mode
             .as_ref()
@@ -622,15 +647,15 @@ impl Session {
 
     /// The state to send now.
     fn state(&self) -> Effect {
+        let shown = self.shown();
         let items = self
-            .visible()
+            .visible(&shown)
             .into_iter()
             .map(|(source, index)| {
                 let source = &self.sources[source];
                 frontend_item(&self.plugins[source.plugin], &source.items[index])
             })
             .collect();
-        let shown = self.shown();
         let error = self.action_error.clone().or_else(|| {
             shown.iter().find_map(|&source| {
                 let source = &self.sources[source];
@@ -668,6 +693,8 @@ fn is_global(plugin: &Plugin) -> bool {
 /// The length in bytes of `prefix` at the start of `text`, comparing
 /// characters without case.
 fn prefix_len(text: &str, prefix: &str) -> Option<usize> {
+    // Discovery refuses empty prefixes; this keeps one from matching
+    // everything if that ever changes.
     if prefix.is_empty() {
         return None;
     }

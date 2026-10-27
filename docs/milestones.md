@@ -58,10 +58,10 @@ frontend in your terminal:
 ```
 
 Typing a line sends it as `input`, read in the mode the prompt shows
-(`Repos> ` in a mode, `> ` in the plain search). `!N` activates item N's default action,
-`!!N` its alternate, `<` sends `leave_mode` and `\t` sends `complete`. It
-uses the real Omarchy platform, so `!1` really launches Firefox. It's a
-second frontend speaking the public protocol, which is the check the spec's
+(`Repos> ` in a mode, `> ` in the plain search). `!N` activates item N's
+default action, `!!N` its alternate, `<` sends `leave_mode` and `\t` sends
+`complete`. It uses the real Omarchy platform, so `!1` really launches
+Firefox. It's a second frontend speaking the public protocol, which is the check the spec's
 *Testing* section asks for. The end-to-end test (`tests/e2e_core.py`) uses
 the same client code with fixture plugins and the recording platform (see
 M8).
@@ -392,8 +392,8 @@ query*, *Kinds*)
 - The query: `text` trimmed, used for filtering and sent as `text` in
   plugin requests; `state.text` keeps trailing whitespace.
 - In a list mode, filter that plugin's items. For `query` plugins, send a
-  `query` request on every input and show the items as given, sorted by
-  `score` when present.
+  `query` request whenever the query changes (and on entering the mode) and
+  show the items as given, sorted by `score` when present.
 - `tools/dev.py` shows the active mode in its prompt.
 
 **Done when**

@@ -1094,7 +1094,7 @@ fn reentering_a_list_mode_asks_again_and_keeps_its_items_meanwhile() {
 }
 
 #[test]
-fn a_refresh_in_a_mode_asks_the_mode_again() {
+fn a_refresh_in_a_mode_asks_only_the_mode_again() {
     let mut test = modes();
     test.open();
     let calc = request_id(&test.input_in(1, None, "calc:1+1"), "calc");
@@ -1103,10 +1103,7 @@ fn a_refresh_in_a_mode_asks_the_mode_again() {
     test.items(calc, vec![item]);
     test.activate("calc/2", "0");
     let effects = test.session.handle(Event::Ran(Ok(())));
-    assert_eq!(
-        requests(&effects),
-        [("apps", &Method::list()), ("calc", &query("1+1"))]
-    );
+    assert_eq!(requests(&effects), [("calc", &query("1+1"))]);
 }
 
 #[test]
@@ -1143,7 +1140,14 @@ fn an_item_past_max_items_cannot_be_activated() {
     });
     let [apps] = test.open()[..] else { panic!() };
     test.items(apps, vec![copy("a", "A"), copy("b", "B")]);
-    only_state(test.activate("apps/b", "0"));
+    let state = only_state(test.activate("apps/b", "0"));
+    assert_eq!(refs(&state), ["apps/a"]);
+    assert!(
+        test.lines
+            .get()
+            .iter()
+            .any(|line| line.contains("can't activate \"apps/b\""))
+    );
 }
 
 #[test]
@@ -1175,4 +1179,41 @@ fn a_rescan_leaves_the_mode() {
     // Nothing indexes into the old plugins, even before the next open.
     let state = last_state(&test.input_in(2, None, "x"));
     assert_eq!(state.mode, None);
+}
+
+#[test]
+fn switching_from_one_mode_to_another_cancels_the_old_ones_request() {
+    let mut test = modes();
+    test.open();
+    let pi = request_id(&test.input_in(1, None, "pi:"), "pi");
+    // The frontend shows calc now (say, the user left pi and typed `calc:`).
+    let effects = test.input_in(2, Some("calc"), "1");
+    assert_eq!(effects[0], Effect::Cancel(pi));
+    assert_eq!(requests(&effects), [("calc", &query("1"))]);
+    assert_eq!(mode_id(&last_state(&effects)), Some("calc"));
+    assert_eq!(test.items_effects(pi, vec![copy("ql", "ql")]), []);
+}
+
+#[test]
+fn prefixes_and_leave_mode_work_on_characters_not_bytes() {
+    let mut test = Test::new(vec![with_prefixes("pi", &["π:"], "")]);
+    test.open();
+    let state = last_state(&test.input_in(1, None, "π"));
+    assert_eq!(state.mode, None, "text shorter than the prefix");
+    let state = last_state(&test.input_in(2, None, "π:ab"));
+    assert_eq!(mode_id(&state), Some("pi"));
+    assert_eq!(state.text, "ab");
+    test.input_in(3, Some("pi"), "");
+    let state = last_state(&test.send(Incoming::LeaveMode));
+    assert_eq!(state.text, "π");
+}
+
+#[test]
+fn reentering_a_query_mode_asks_again_even_for_the_same_query() {
+    let mut test = modes();
+    test.open();
+    test.input_in(1, None, "calc:1");
+    test.send(Incoming::LeaveMode);
+    let effects = test.input_in(2, None, "calc:1");
+    assert_eq!(requests(&effects), [("calc", &query("1"))]);
 }

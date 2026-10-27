@@ -198,8 +198,14 @@ pub struct State {
 pub struct Mode {
     pub id: String,
     pub name: String,
-    #[serde(serialize_with = "explicit_icon")]
+    /// Written as an object; left out, like `placeholder`, when the
+    /// manifest doesn't set it, as for frontend items.
+    #[serde(
+        serialize_with = "explicit_icon",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub icon: Option<Icon>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,
 }
 
@@ -424,16 +430,23 @@ mod tests {
     }
 
     #[test]
-    fn a_mode_icon_is_explicit_too() {
-        let mode = Mode {
-            id: "pi".into(),
-            name: "pi".into(),
-            icon: Some(Icon::Name("folder".into())),
-            placeholder: None,
+    fn a_mode_icon_is_explicit_too_and_unset_fields_are_left_out() {
+        let mode = |icon, placeholder| {
+            serde_json::to_value(Mode {
+                id: "pi".into(),
+                name: "pi".into(),
+                icon,
+                placeholder,
+            })
+            .unwrap()
         };
         assert_eq!(
-            serde_json::to_value(mode).unwrap(),
-            json!({"id": "pi", "name": "pi", "icon": {"name": "folder"}, "placeholder": null})
+            mode(
+                Some(Icon::Name("folder".into())),
+                Some("Open pi in…".into())
+            ),
+            json!({"id": "pi", "name": "pi", "icon": {"name": "folder"}, "placeholder": "Open pi in…"})
         );
+        assert_eq!(mode(None, None), json!({"id": "pi", "name": "pi"}));
     }
 }

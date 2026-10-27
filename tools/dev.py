@@ -40,8 +40,8 @@ client = None
 # Set while input() waits for a line, so a state that arrives meanwhile
 # redraws the prompt below it.
 reading = threading.Event()
-# Set when a message arrives, so the next prompt waits for the answer to the
-# last command instead of being printed above it.
+# Set when a message that changes the screen arrives, so the next prompt
+# waits for the answer to the last command instead of being printed above it.
 answered = threading.Event()
 
 
@@ -77,7 +77,7 @@ def show(state):
     if not state["items"] and not state["loading"]:
         lines.append("  (no items)")
     text = "\n".join(lines)
-    if reading.is_set():
+    if reading.is_set() and sys.stdout.isatty():
         # input() is waiting: clear its prompt line, print the state, then
         # draw the prompt again with what was typed so far.
         typed = readline.get_line_buffer() if readline else ""
@@ -96,23 +96,27 @@ def print_messages():
             return
         if message["type"] == "state":
             show(message)
+            answered.set()
         elif message["type"] == "done":
+            # The prompt waits for the new session's state.
             print("done; opening a new session", flush=True)
             client.open()
-            continue  # the prompt waits for the new session's state
         elif message["type"] == "ready" and message["v"] != VERSION:
             print(f"\nthe core speaks frontend protocol {message['v']}, not {VERSION}", flush=True)
             answered.set()
             return
-        answered.set()
 
 
 def send(command):
-    """Sends one line typed at the prompt."""
+    """Sends one line typed at the prompt. Returns whether a state answers
+    it."""
     if command in ("\\t", "\t"):
+        # Nothing to complete until mode hints (M10), so no state comes back.
         client.send("complete")
+        return False
     elif command == "<":
         client.send("leave_mode")
+        return client.mode is not None  # the core ignores it outside a mode
     elif command.startswith("!") and len(command) > 1:
         target = item_action(command)
         if not target:
@@ -149,7 +153,7 @@ def main():
     plugins = ROOT / "target" / "plugins"
     lay_out(plugins, bins)
     lay_out_example(plugins, EXAMPLES / "repos.plugin.toml", bins / "examples" / "repos")
-    client = CoreClient([str(bins / "quick-launcher-core"), "--bundled-plugins", str(plugins)])
+    client = CoreClient([str(bins / "quick-launcher-core"), f"--bundled-plugins={plugins}"])
     client.hello()
     client.open()
     threading.Thread(target=print_messages, daemon=True).start()

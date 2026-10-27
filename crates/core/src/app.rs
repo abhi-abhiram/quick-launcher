@@ -25,7 +25,7 @@ use crate::run_action;
 use crate::session::{Effect, Event, Session};
 use crate::{Registry, discovery};
 
-const USAGE: &str = "usage: quick-launcher-core [--bundled-plugins <dir>]";
+const USAGE: &str = "usage: quick-launcher-core [--bundled-plugins[=]<dir>]";
 
 /// How long plugin processes get to be stopped when the core exits.
 const SHUTDOWN: Duration = Duration::from_millis(500);
