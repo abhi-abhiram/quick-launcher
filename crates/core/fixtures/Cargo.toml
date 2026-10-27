@@ -1,0 +1,12 @@
+[package]
+name = "quick-launcher-core-fixtures"
+description = "Fixture plugins for the core's plugin host tests. Never installed."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+quick-launcher-plugin.workspace = true
+serde_json.workspace = true
