@@ -156,8 +156,18 @@ enum Waiting {
     Ran(After),
     /// The answer to the `activate` request with this id, for a `plugin`
     /// run, from this plugin (an index into the session's plugins). Its
-    /// `result` decides what happens next.
-    Plugin { request: u64, plugin: usize },
+    /// `result` decides what happens next. `mode` is the active mode's
+    /// plugin when it was sent: a `query` in the result is that mode's
+    /// text, so it's dropped once another mode (or none) is active.
+    ///
+    /// Request ids come from one counter that never resets, so this answer
+    /// can't be mistaken for a source's, an older activation's or one from
+    /// another session.
+    Plugin {
+        request: u64,
+        plugin: usize,
+        mode: Option<usize>,
+    },
 }
 
 /// The launcher's state between frontend messages.
@@ -203,8 +213,8 @@ impl Session {
             Event::Answer { request, answer } => self.on_answer(request, answer),
             Event::Ran(outcome) => self.on_ran(outcome),
             Event::Plugins(plugins) => {
-                // Sources and the mode index into the plugins, so they go
-                // with them.
+                // Sources, the mode and a running activation index into the
+                // plugins, so they go with them (`end` drops the activation).
                 let effects = self.end();
                 self.mode = None;
                 self.plugins = plugins;
@@ -274,11 +284,8 @@ impl Session {
     }
 
     fn on_answer(&mut self, request: u64, answer: Answer) -> Vec<Effect> {
-        if let Some(running) = self.running.take_if(
-            |running| matches!(running.waiting, Waiting::Plugin { request: r, .. } if r == request),
-        ) && let Waiting::Plugin { plugin, .. } = running.waiting
-        {
-            return self.on_activated(plugin, &running.title, answer);
+        if let Some((title, plugin, mode)) = self.take_activation(request) {
+            return self.on_activated(&title, plugin, mode, answer);
         }
         let Some(source) = self
             .sources
@@ -344,12 +351,27 @@ impl Session {
     /// replacing the text with `query` and asking for the items again on
     /// `refresh`. An error keeps the items shown and becomes the state's
     /// error.
-    fn on_activated(&mut self, plugin: usize, title: &str, answer: Answer) -> Vec<Effect> {
+    ///
+    /// `query` is read as `input` would read it: literally in a mode, and in
+    /// the plain search a prefix at its start enters that mode. It's dropped
+    /// when the mode active at the `activate` (`mode`) is no longer, since
+    /// it was meant for that mode's text. Newer input in the same mode
+    /// doesn't drop it.
+    fn on_activated(
+        &mut self,
+        title: &str,
+        plugin: usize,
+        mode: Option<usize>,
+        answer: Answer,
+    ) -> Vec<Effect> {
         let result = match answer {
             Answer::Result(result) => result,
             Answer::Failed(failure) => {
                 self.log
                     .write(format_args!("couldn't run {title:?}: {failure}"));
+                // Unlike a list or query error (`failure_message`), the
+                // plugin's own message goes without its name: the action's
+                // title already says what failed.
                 let reason = match failure {
                     Failure::Plugin(message) => message,
                     failure => format!("{} {failure}", self.plugins[plugin].manifest.name),
@@ -358,8 +380,7 @@ impl Session {
                 return vec![self.state()];
             }
             Answer::Items { .. } => {
-                // The host never passes items as an answer to `activate`.
-                return vec![self.state()];
+                unreachable!("the host turns items answering `activate` into a failure")
             }
         };
         if result.closes() {
@@ -368,19 +389,55 @@ impl Session {
         let ActivateResult { refresh, query, .. } = result;
         self.action_error = None;
         let mut effects = Vec::new();
-        if let Some(query) = query {
-            // The text of the mode the state shows, as `input` would set
-            // it. A prefix in it is search text, not a mode to enter.
-            self.text = query;
-            if !refresh {
-                effects.extend(self.query_if_changed());
+        let mut asked = false;
+        let current = self.mode.as_ref().map(|active| active.plugin);
+        match query {
+            Some(query) if current != mode => {
+                self.log.write(format_args!(
+                    "not replacing the text with {query:?} from {title:?}: \
+                     the mode changed since it was chosen"
+                ));
             }
+            Some(query) => {
+                let (next, text) = match &self.mode {
+                    Some(active) => (Some(active.clone()), query),
+                    None => self.read_plain(query),
+                };
+                if next.as_ref().map(|active| active.plugin) != current {
+                    // Entering a mode asks its plugin, which is all a
+                    // refresh would ask now.
+                    effects.extend(self.leave());
+                    self.mode = next;
+                    self.text = text;
+                    effects.extend(self.enter());
+                    asked = true;
+                } else {
+                    self.text = text;
+                    if !refresh {
+                        effects.extend(self.query_if_changed());
+                    }
+                }
+            }
+            None => {}
         }
-        if refresh {
+        if refresh && !asked {
             effects.extend(self.ask_shown());
         }
         effects.push(self.state());
         effects
+    }
+
+    /// Takes the running activation if `request` is its `activate`,
+    /// returning its title, plugin and the mode it was chosen in. It's
+    /// checked before the sources: ids are unique, so a match is always it.
+    fn take_activation(&mut self, request: u64) -> Option<(String, usize, Option<usize>)> {
+        let running = self.running.take_if(
+            |running| matches!(running.waiting, Waiting::Plugin { request: r, .. } if r == request),
+        )?;
+        let Waiting::Plugin { plugin, mode, .. } = running.waiting else {
+            unreachable!("taken only while waiting for this activation");
+        };
+        Some((running.title, plugin, mode))
     }
 
     /// Ends the session after an action ran, telling the frontend.
@@ -415,16 +472,22 @@ impl Session {
                 };
                 (Some(Active { plugin, prefix }), text)
             }
-            None => match self.parse_prefix(&text) {
-                Some((plugin, len)) => {
-                    let prefix = Some(text[..len].to_owned());
-                    let rest = text[len..].trim_start().to_owned();
-                    (Some(Active { plugin, prefix }), rest)
-                }
-                None => (None, text),
-            },
+            None => self.read_plain(text),
         };
         self.switch(mode, text)
+    }
+
+    /// Reads `text` typed in the plain search: a prefix at its start enters
+    /// its mode, and whitespace right after the prefix is dropped.
+    fn read_plain(&self, text: String) -> (Option<Active>, String) {
+        match self.parse_prefix(&text) {
+            Some((plugin, len)) => {
+                let prefix = Some(text[..len].to_owned());
+                let rest = text[len..].trim_start().to_owned();
+                (Some(Active { plugin, prefix }), rest)
+            }
+            None => (None, text),
+        }
     }
 
     /// Makes `mode` the active mode with `text`, asking its plugin for
@@ -671,6 +734,7 @@ impl Session {
                 waiting: Waiting::Plugin {
                     request: id,
                     plugin,
+                    mode: self.mode.as_ref().map(|active| active.plugin),
                 },
             });
             return vec![Effect::Request {

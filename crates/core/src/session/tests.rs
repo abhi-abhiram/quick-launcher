@@ -1762,15 +1762,90 @@ fn a_query_result_replaces_the_text() {
 }
 
 #[test]
-fn a_query_result_with_a_prefix_stays_in_the_shown_mode() {
+fn a_query_result_with_a_prefix_in_the_plain_search_enters_its_mode() {
     let mut test = Test::new(vec![global("apps"), plugin("pi", "")]);
     let [apps] = test.open()[..] else { panic!() };
     test.items(apps, vec![pinnable("b", "B", "pin")]);
     let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
-    let effects = test.answer(id, result(false, false, Some("pi:x")));
+    let effects = test.answer(id, result(false, false, Some("pi: x")));
+    assert_eq!(requests(&effects), [("pi", &Method::list())]);
+    let state = last_state(&effects);
+    assert_eq!((mode_id(&state), state.text.as_str()), (Some("pi"), "x"));
+    // Entered by that prefix, so leave_mode puts it back.
+    let state = last_state(&test.send(Incoming::LeaveMode));
+    assert_eq!(state.text, "pix");
+}
+
+#[test]
+fn a_query_result_with_a_prefix_and_refresh_asks_the_new_mode_once() {
+    let mut test = Test::new(vec![global("apps"), plugin("pi", "")]);
+    let [apps] = test.open()[..] else { panic!() };
+    test.items(apps, vec![pinnable("b", "B", "pin")]);
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    let effects = test.answer(id, result(false, true, Some("pi:")));
+    assert_eq!(requests(&effects), [("pi", &Method::list())]);
+    assert_eq!(mode_id(&last_state(&effects)), Some("pi"));
+}
+
+#[test]
+fn a_query_result_with_a_prefix_in_a_mode_is_text() {
+    let mut test = Test::new(vec![plugin("pi", ""), plugin("term", "")]);
+    test.open();
+    let pi = request_id(&test.input_in(1, None, "pi:"), "pi");
+    test.items(pi, vec![pinnable("x", "X", "use")]);
+    let (id, ..) = activate_request(&test.activate("pi/x", "use"));
+    let effects = test.answer(id, result(false, false, Some("term:ls")));
     assert_eq!(requests(&effects), []);
     let state = last_state(&effects);
-    assert_eq!((mode_id(&state), state.text.as_str()), (None, "pi:x"));
+    assert_eq!(
+        (mode_id(&state), state.text.as_str()),
+        (Some("pi"), "term:ls")
+    );
+}
+
+#[test]
+fn a_query_result_is_dropped_once_the_mode_changed_but_refresh_still_applies() {
+    let mut test = Test::new(vec![global("apps"), plugin("pi", "")]);
+    let [apps] = test.open()[..] else { panic!() };
+    test.items(apps, vec![copy("a", "A")]);
+    let pi = request_id(&test.input_in(1, None, "pi:"), "pi");
+    test.items(pi, vec![pinnable("x", "X", "use")]);
+    test.input_in(2, Some("pi"), "x");
+    let (id, ..) = activate_request(&test.activate("pi/x", "use"));
+    let state = last_state(&test.send(Incoming::LeaveMode));
+    assert_eq!(state.text, "pix");
+    let effects = test.answer(id, result(false, true, Some("other")));
+    assert_eq!(requests(&effects), [("apps", &Method::list())]);
+    let state = last_state(&effects);
+    assert_eq!((mode_id(&state), state.text.as_str()), (None, "pix"));
+    assert!(
+        test.lines
+            .get()
+            .iter()
+            .any(|line| line.contains("the mode changed"))
+    );
+}
+
+#[test]
+fn newer_input_in_the_same_mode_does_not_drop_a_query_result() {
+    let (mut test, _) = with_pinnable();
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    test.input(2, "typed");
+    let state = only_state(test.answer(id, result(false, false, Some("a"))));
+    assert_eq!((state.seq, state.text.as_str()), (2, "a"));
+}
+
+#[test]
+fn an_activate_answer_after_a_reopen_or_a_rescan_is_ignored() {
+    let (mut test, _) = with_pinnable();
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    let [apps] = test.open()[..] else { panic!() };
+    assert_eq!(test.answer(id, result(true, false, None)), []);
+    test.items(apps, vec![pinnable("b", "B", "pin")]);
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    // The rescan removes the plugin the activation indexes.
+    assert_eq!(test.session.handle(Event::Plugins(Vec::new())), []);
+    assert_eq!(test.answer(id, result(false, true, None)), []);
 }
 
 #[test]
@@ -1817,6 +1892,13 @@ fn an_activate_error_keeps_the_items_and_shows_until_the_next_input() {
     assert_eq!(
         only_state(test.answer(id, timeout)).error.as_deref(),
         Some("Couldn't run “PIN”: APPS didn't respond within 2000 ms")
+    );
+
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    let crash = Answer::Failed(Failure::Exited(None));
+    assert_eq!(
+        only_state(test.answer(id, crash)).error.as_deref(),
+        Some("Couldn't run “PIN”: APPS stopped without answering")
     );
 }
 
