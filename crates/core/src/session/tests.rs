@@ -549,16 +549,6 @@ fn a_disabled_items_first_action_cannot_run_but_others_can() {
 }
 
 #[test]
-fn plugin_actions_are_not_run_yet() {
-    let mut test = Test::new(vec![global("apps")]);
-    let [apps] = test.open()[..] else { panic!() };
-    let mut item = copy("a", "A");
-    item.actions[0].run = Run::Plugin("pin".into());
-    test.items(apps, vec![item]);
-    only_state(test.activate("apps/a", "0"));
-}
-
-#[test]
 fn a_failed_action_shows_an_error_until_the_next_input() {
     let mut test = Test::new(vec![global("apps")]);
     let [apps] = test.open()[..] else { panic!() };
@@ -1645,4 +1635,343 @@ fn a_query_item_hidden_by_the_dedupe_still_runs_from_its_ref() {
         &test.activate("term:query:ls", "1")[..],
         [Effect::Run { run: Run::Copy(text), .. }] if text == "ls"
     ));
+}
+
+// Activation (M11).
+
+/// An item whose only action is the `plugin` action `action`, with `after`
+/// set to `refresh` to show that it's ignored.
+fn pinnable(id: &str, label: &str, action: &str) -> Item {
+    let mut item = copy(id, label);
+    item.actions[0] = Action {
+        id: Some(action.into()),
+        title: action.to_uppercase(),
+        key: None,
+        run: Run::Plugin(action.into()),
+        after: After::Refresh,
+    };
+    item
+}
+
+/// The `activate` request in `effects`: its id, the plugin it goes to and
+/// its params.
+fn activate_request(effects: &[Effect]) -> (u64, String, ActivateParams) {
+    match effects {
+        [
+            Effect::Request {
+                plugin,
+                request:
+                    Request {
+                        id,
+                        method: Method::Activate(params),
+                        ..
+                    },
+            },
+        ] => (*id, plugin.id().to_owned(), params.clone()),
+        other => panic!("expected one activate request, got {other:?}"),
+    }
+}
+
+fn result(close: bool, refresh: bool, query: Option<&str>) -> Answer {
+    Answer::Result(ActivateResult {
+        close,
+        refresh,
+        query: query.map(Into::into),
+    })
+}
+
+/// `apps` (global) with `a` and `b` listed, `b` pinnable, and `b` typed.
+fn with_pinnable() -> (Test, u64) {
+    let mut test = Test::new(vec![global("apps")]);
+    let [apps] = test.open()[..] else { panic!() };
+    test.items(apps, vec![copy("a", "A"), pinnable("b", "B", "pin")]);
+    test.input(1, " b ");
+    (test, apps)
+}
+
+#[test]
+fn a_plugin_action_sends_activate_with_the_item_and_the_query() {
+    let (mut test, apps) = with_pinnable();
+    let (id, plugin, params) = activate_request(&test.activate("apps/b", "pin"));
+    assert_eq!(plugin, "apps");
+    assert_ne!(id, apps);
+    assert_eq!(
+        params,
+        ActivateParams {
+            item: Some("b".into()),
+            action: "pin".into(),
+            text: "b".into(),
+        }
+    );
+    // Nothing runs through the platform, so no `Ran` is awaited.
+    assert_eq!(test.session.handle(Event::Ran(Ok(()))), []);
+}
+
+#[test]
+fn a_closing_result_ends_the_session_whatever_after_says() {
+    let (mut test, _) = with_pinnable();
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    assert_eq!(
+        test.answer(id, result(true, false, None)),
+        [Effect::Send(Outgoing::Done)]
+    );
+    assert_eq!(only_state(test.activate("apps/b", "pin")).items, []);
+}
+
+#[test]
+fn a_refresh_result_asks_the_shown_plugins_again_and_stays_open() {
+    let (mut test, _) = with_pinnable();
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    // `refresh` implies staying open, even with `close` left at its default.
+    let effects = test.answer(id, result(true, true, None));
+    let [
+        Effect::Request { request, .. },
+        Effect::Send(Outgoing::State(state)),
+    ] = &effects[..]
+    else {
+        panic!("{effects:?}")
+    };
+    assert_eq!(request.method, Method::list());
+    assert!(state.loading);
+    assert_eq!(refs(state), ["apps/b"], "old items stay until the answer");
+    let state = test.items(request.id, vec![copy("b", "B pinned")]);
+    assert_eq!(state.items[0].label, "B pinned");
+}
+
+#[test]
+fn a_refresh_result_in_a_mode_asks_only_the_mode() {
+    let mut test = Test::new(vec![global("apps"), plugin("pi", "")]);
+    test.open();
+    let pi = request_id(&test.input_in(1, None, "pi:"), "pi");
+    test.items(pi, vec![pinnable("x", "X", "unpin")]);
+    let (id, plugin, _) = activate_request(&test.activate("pi/x", "unpin"));
+    assert_eq!(plugin, "pi");
+    let effects = test.answer(id, result(false, true, None));
+    assert_eq!(requests(&effects), [("pi", &Method::list())]);
+    assert_eq!(mode_id(&last_state(&effects)), Some("pi"));
+}
+
+#[test]
+fn a_query_result_replaces_the_text() {
+    let (mut test, _) = with_pinnable();
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    let state = only_state(test.answer(id, result(false, false, Some("a"))));
+    assert_eq!(state.text, "a");
+    assert_eq!(state.seq, 1, "seq stays, as for leave_mode");
+    assert_eq!(refs(&state), ["apps/a", "apps:mode"]);
+}
+
+#[test]
+fn a_query_result_with_a_prefix_in_the_plain_search_enters_its_mode() {
+    let mut test = Test::new(vec![global("apps"), plugin("pi", "")]);
+    let [apps] = test.open()[..] else { panic!() };
+    test.items(apps, vec![pinnable("b", "B", "pin")]);
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    let effects = test.answer(id, result(false, false, Some("pi: x")));
+    assert_eq!(requests(&effects), [("pi", &Method::list())]);
+    let state = last_state(&effects);
+    assert_eq!((mode_id(&state), state.text.as_str()), (Some("pi"), "x"));
+    // Entered by that prefix, so leave_mode puts it back.
+    let state = last_state(&test.send(Incoming::LeaveMode));
+    assert_eq!(state.text, "pix");
+}
+
+#[test]
+fn a_query_result_with_a_prefix_and_refresh_asks_the_new_mode_once() {
+    let mut test = Test::new(vec![global("apps"), plugin("pi", "")]);
+    let [apps] = test.open()[..] else { panic!() };
+    test.items(apps, vec![pinnable("b", "B", "pin")]);
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    let effects = test.answer(id, result(false, true, Some("pi:")));
+    assert_eq!(requests(&effects), [("pi", &Method::list())]);
+    assert_eq!(mode_id(&last_state(&effects)), Some("pi"));
+}
+
+#[test]
+fn a_query_result_with_a_prefix_in_a_mode_is_text() {
+    let mut test = Test::new(vec![plugin("pi", ""), plugin("term", "")]);
+    test.open();
+    let pi = request_id(&test.input_in(1, None, "pi:"), "pi");
+    test.items(pi, vec![pinnable("x", "X", "use")]);
+    let (id, ..) = activate_request(&test.activate("pi/x", "use"));
+    let effects = test.answer(id, result(false, false, Some("term:ls")));
+    assert_eq!(requests(&effects), []);
+    let state = last_state(&effects);
+    assert_eq!(
+        (mode_id(&state), state.text.as_str()),
+        (Some("pi"), "term:ls")
+    );
+}
+
+#[test]
+fn a_query_result_is_dropped_once_the_mode_changed_but_refresh_still_applies() {
+    let mut test = Test::new(vec![global("apps"), plugin("pi", "")]);
+    let [apps] = test.open()[..] else { panic!() };
+    test.items(apps, vec![copy("a", "A")]);
+    let pi = request_id(&test.input_in(1, None, "pi:"), "pi");
+    test.items(pi, vec![pinnable("x", "X", "use")]);
+    test.input_in(2, Some("pi"), "x");
+    let (id, ..) = activate_request(&test.activate("pi/x", "use"));
+    let state = last_state(&test.send(Incoming::LeaveMode));
+    assert_eq!(state.text, "pix");
+    let effects = test.answer(id, result(false, true, Some("other")));
+    assert_eq!(requests(&effects), [("apps", &Method::list())]);
+    let state = last_state(&effects);
+    assert_eq!((mode_id(&state), state.text.as_str()), (None, "pix"));
+    assert!(
+        test.lines
+            .get()
+            .iter()
+            .any(|line| line.contains("the mode changed"))
+    );
+}
+
+#[test]
+fn newer_input_in_the_same_mode_does_not_drop_a_query_result() {
+    let (mut test, _) = with_pinnable();
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    test.input(2, "typed");
+    let state = only_state(test.answer(id, result(false, false, Some("a"))));
+    assert_eq!((state.seq, state.text.as_str()), (2, "a"));
+}
+
+#[test]
+fn an_activate_answer_after_a_reopen_or_a_rescan_is_ignored() {
+    let (mut test, _) = with_pinnable();
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    let [apps] = test.open()[..] else { panic!() };
+    assert_eq!(test.answer(id, result(true, false, None)), []);
+    test.items(apps, vec![pinnable("b", "B", "pin")]);
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    // The rescan removes the plugin the activation indexes.
+    assert_eq!(test.session.handle(Event::Plugins(Vec::new())), []);
+    assert_eq!(test.answer(id, result(false, true, None)), []);
+}
+
+#[test]
+fn a_query_result_in_a_query_mode_asks_for_the_new_query() {
+    let mut test = Test::new(vec![plugin("calc", "kind = \"query\"")]);
+    test.open();
+    let calc = request_id(&test.input_in(1, None, "calc: 2*"), "calc");
+    test.items(calc, vec![pinnable("x", "X", "use")]);
+    let (id, ..) = activate_request(&test.activate("calc/x", "use"));
+    let effects = test.answer(id, result(false, false, Some("2*21")));
+    assert_eq!(requests(&effects), [("calc", &query("2*21"))]);
+    assert_eq!(last_state(&effects).text, "2*21");
+    // With `refresh` too, it's asked once, for the new query.
+    let calc = request_id(&effects, "calc");
+    test.items(calc, vec![pinnable("x", "X", "use")]);
+    let (id, ..) = activate_request(&test.activate("calc/x", "use"));
+    let effects = test.answer(id, result(false, true, Some("42")));
+    assert_eq!(requests(&effects), [("calc", &query("42"))]);
+}
+
+#[test]
+fn a_result_that_neither_closes_nor_refreshes_resends_the_state() {
+    let (mut test, _) = with_pinnable();
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    let state = only_state(test.answer(id, result(false, false, None)));
+    assert_eq!((state.text.as_str(), refs(&state)), (" b ", vec!["apps/b"]));
+}
+
+#[test]
+fn an_activate_error_keeps_the_items_and_shows_until_the_next_input() {
+    let (mut test, _) = with_pinnable();
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    let failed = Answer::Failed(Failure::Plugin("pins.json is not valid JSON".into()));
+    let state = only_state(test.answer(id, failed));
+    assert_eq!(
+        state.error.as_deref(),
+        Some("Couldn't run “PIN”: pins.json is not valid JSON")
+    );
+    assert_eq!(refs(&state), ["apps/b"]);
+    assert_eq!(test.input(2, "b").error, None);
+
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    let timeout = Answer::Failed(Failure::NoResponse(Duration::from_millis(2000)));
+    assert_eq!(
+        only_state(test.answer(id, timeout)).error.as_deref(),
+        Some("Couldn't run “PIN”: APPS didn't respond within 2000 ms")
+    );
+
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    let crash = Answer::Failed(Failure::Exited(None));
+    assert_eq!(
+        only_state(test.answer(id, crash)).error.as_deref(),
+        Some("Couldn't run “PIN”: APPS stopped without answering")
+    );
+}
+
+#[test]
+fn an_activate_answer_after_the_session_ended_is_ignored() {
+    let (mut test, _) = with_pinnable();
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    // The activate isn't cancelled: the plugin may be writing its pins.
+    assert_eq!(test.send(Incoming::Close), []);
+    assert_eq!(test.answer(id, result(true, false, None)), []);
+}
+
+#[test]
+fn only_the_newest_activation_is_applied() {
+    let (mut test, _) = with_pinnable();
+    let (first, ..) = activate_request(&test.activate("apps/b", "pin"));
+    let (second, ..) = activate_request(&test.activate("apps/b", "pin"));
+    assert_eq!(test.answer(first, result(true, false, None)), []);
+    assert_eq!(
+        test.answer(second, result(true, false, None)),
+        [Effect::Send(Outgoing::Done)]
+    );
+}
+
+#[test]
+fn a_disabled_items_first_plugin_action_cannot_run_but_others_can() {
+    let mut test = Test::new(vec![global("pi")]);
+    let [pi] = test.open()[..] else { panic!() };
+    let mut item = pinnable("x", "X", "open");
+    item.disabled = true;
+    item.actions
+        .push(pinnable("x", "X", "unpin").actions.remove(0));
+    test.items(pi, vec![item]);
+    only_state(test.activate("pi/x", "open"));
+    let (_, _, params) = activate_request(&test.activate("pi/x", "unpin"));
+    assert_eq!(params.action, "unpin");
+}
+
+#[test]
+fn an_unknown_ref_sends_no_activate() {
+    let (mut test, _) = with_pinnable();
+    let state = only_state(test.activate("apps/gone", "pin"));
+    assert_eq!(refs(&state), ["apps/b"]);
+}
+
+/// `term` as in [`with_query_item`], with a `plugin` action that runs the
+/// typed command and records it.
+fn with_plugin_query_item() -> Test {
+    Test::new(vec![plugin(
+        "term",
+        r#"[query_item]
+label = "{query}"
+actions = [{ id = "run", title = "Run {query}", run = { plugin = "run-{query}" } }]
+"#,
+    )])
+}
+
+#[test]
+fn a_query_items_plugin_action_sends_a_null_item_and_the_recorded_text() {
+    let mut test = with_plugin_query_item();
+    in_term(&mut test, Vec::new());
+    test.input_in(2, Some("term"), "ls");
+    // Newer input arrives before the user's Enter on `ls`.
+    test.input_in(3, Some("term"), "lsb");
+    let (_, plugin, params) = activate_request(&test.activate("term:query:ls", "run"));
+    assert_eq!(plugin, "term");
+    assert_eq!(
+        params,
+        ActivateParams {
+            item: None,
+            // A `plugin` run's action id is a name, so it isn't filled in.
+            action: "run-{query}".into(),
+            text: "ls".into(),
+        }
+    );
 }

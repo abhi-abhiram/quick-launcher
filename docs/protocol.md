@@ -609,7 +609,16 @@ Every response has `v` and echoes the request `id`.
   - `close` (bool, default `true`): close the launcher.
   - `refresh` (bool, default `false`): re-request the mode's items. Implies
     the launcher stays open.
-  - `query` (string, optional): replace the typed text.
+  - `query` (string, optional): replace the typed text. The core reads it
+    as it reads `input`: literally in a mode, and in the plain search a
+    prefix at its start enters that mode. If the active mode (or the plain
+    search) is no longer the one the action was chosen in, `query` is
+    dropped; `refresh` still applies.
+
+  The core applies only the newest activation's `result`: a newer
+  `activate`, or `close` or `open`, drops the answer to an older one.
+  Newer `input` in the same mode doesn't. The `activate` request itself is
+  never cancelled, so a plugin can finish writing what it changed.
 - `error` becomes the state's `error`. If it answers a `list` or `query`,
   that plugin contributes no items for that request. An error from
   `activate`, or a timeout after a partial answer, leaves the items already

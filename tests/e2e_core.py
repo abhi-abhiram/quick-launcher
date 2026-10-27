@@ -279,6 +279,71 @@ class Modes(Core):
         self.assertEqual(refs(self.state_for(client, 2)), ["stream/1"])
 
 
+class Activation(Core):
+    def setUp(self):
+        super().setUp()
+        self.add_plugin(
+            "pins",
+            "pins",
+            "global = true\n"
+            "[query_item]\n"
+            'label = "Add {query}"\n'
+            'actions = [{ id = "add", title = "Add", run = { plugin = "add" } }]',
+        )
+
+    def settled(self, client, predicate):
+        return client.wait_for(lambda m: m["type"] == "state" and not m["loading"] and predicate(m))
+
+    def test_a_plugin_action_with_refresh_shows_the_change(self):
+        client = self.ready()
+        client.open()
+        state = client.settled_state()
+        self.assertEqual(refs(state), ["pins/one", "pins/two"])
+        self.assertEqual([a["id"] for a in state["items"][1]["actions"]], ["copy", "pin"])
+
+        client.activate("pins/two", "pin")
+        state = self.settled(client, lambda m: "badge" in m["items"][1])
+        self.assertEqual(state["items"][1]["badge"], "pinned")
+        self.assertEqual([a["id"] for a in state["items"][1]["actions"]], ["copy", "unpin"])
+        self.assertIn('pins: activating "pin" on Some("two") with ""', self.log_text())
+        self.assertEqual(self.calls(), [], "a plugin action runs nothing itself")
+
+        # The launcher stayed open: the next action still runs.
+        client.activate("pins/two", "unpin")
+        state = self.settled(client, lambda m: "badge" not in m["items"][1])
+        client.activate("pins/one", "copy")
+        self.assertEqual(client.wait_for(lambda m: m["type"] == "done")["type"], "done")
+        self.assertEqual(self.calls(), [{"copy": "one"}])
+
+    def test_an_activate_error_keeps_the_items(self):
+        client = self.ready()
+        client.open()
+        client.settled_state()
+        # Something else pins `one` while the launcher still offers "pin".
+        (self.home / "state/quick-launcher/pins/pinned").write_text("one")
+        client.activate("pins/one", "pin")
+        state = client.wait_for(lambda m: m["type"] == "state" and m["error"])
+        self.assertEqual(state["error"], "Couldn't run “pin”: one is already pinned")
+        self.assertEqual(refs(state), ["pins/one", "pins/two"])
+
+    def test_a_query_item_runs_with_the_text_it_was_built_from(self):
+        client = self.ready()
+        client.open("pins")
+        client.settled_state()
+        client.input("three")
+        state = self.settled(client, lambda m: m["seq"] == 1)
+        self.assertEqual(refs(state)[0], "pins:query:three")
+        client.input("threeX")  # newer input before the user's Enter
+        client.activate("pins:query:three", "add")
+        # The refresh: loading, then the plugin's new list.
+        client.wait_for(lambda m: m["type"] == "state" and m["loading"])
+        self.settled(client, lambda m: True)
+        self.assertIn('activating "add" on None with "three"', self.log_text())
+        client.input("")
+        state = self.settled(client, lambda m: m["seq"] == 3)
+        self.assertEqual(refs(state), ["pins/one", "pins/two", "pins/three"])
+
+
 class Versions(Core):
     def test_a_version_mismatch_gets_ready_then_eof_and_a_failure(self):
         client = self.start()

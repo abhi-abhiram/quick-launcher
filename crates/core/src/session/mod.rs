@@ -9,13 +9,15 @@
 //! So far it covers the plain search over every global list plugin and the
 //! mode hints, modes (entered by prefix, by `open`, by the frontend's
 //! `input.mode`, by `complete` or by a hint) for list and query plugins,
-//! `[query_item]`s, and activating actions that run through the platform.
-//! `plugin` actions come in M11.
+//! `[query_item]`s, and activating actions, whether they run through the
+//! platform or are `plugin` actions the plugin answers.
 
 use std::cmp::Ordering;
 
 use quick_launcher_wire::matcher::{self, Score};
-use quick_launcher_wire::{Action, After, Icon, Item, Method, QueryParams, Request, Run};
+use quick_launcher_wire::{
+    Action, ActivateParams, ActivateResult, After, Icon, Item, Method, QueryParams, Request, Run,
+};
 
 use crate::discovery::{Kind, Plugin, QueryItem};
 use crate::frontend::{self, FrontendAction, FrontendItem, Incoming, Mode, Outgoing, State};
@@ -127,18 +129,45 @@ impl<'a> Ref<'a> {
     }
 }
 
-/// What an `activate` names: a mode hint, or an item to run an action of
-/// (a plugin's, or a `[query_item]` filled in with its recorded text).
+/// What an `activate` names: a mode hint, or an item to run an action of.
 enum Target {
     Hint(usize),
-    Item(usize, Item),
+    Item {
+        /// Index into the session's plugins.
+        plugin: usize,
+        item: Box<Item>,
+        /// For a `[query_item]` (filled in with it), the text its ref
+        /// recorded.
+        recorded: Option<String>,
+    },
 }
 
-/// An action that is running, waiting for [`Event::Ran`].
+/// An action that is running.
 #[derive(Debug, Clone)]
 struct Running {
     title: String,
-    after: After,
+    waiting: Waiting,
+}
+
+/// What a running action waits for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Waiting {
+    /// [`Event::Ran`] for a platform run, then does what `after` says.
+    Ran(After),
+    /// The answer to the `activate` request with this id, for a `plugin`
+    /// run, from this plugin (an index into the session's plugins). Its
+    /// `result` decides what happens next. `mode` is the active mode's
+    /// plugin when it was sent: a `query` in the result is that mode's
+    /// text, so it's dropped once another mode (or none) is active.
+    ///
+    /// Request ids come from one counter that never resets, so this answer
+    /// can't be mistaken for a source's, an older activation's or one from
+    /// another session.
+    Plugin {
+        request: u64,
+        plugin: usize,
+        mode: Option<usize>,
+    },
 }
 
 /// The launcher's state between frontend messages.
@@ -184,8 +213,8 @@ impl Session {
             Event::Answer { request, answer } => self.on_answer(request, answer),
             Event::Ran(outcome) => self.on_ran(outcome),
             Event::Plugins(plugins) => {
-                // Sources and the mode index into the plugins, so they go
-                // with them.
+                // Sources, the mode and a running activation index into the
+                // plugins, so they go with them (`end` drops the activation).
                 let effects = self.end();
                 self.mode = None;
                 self.plugins = plugins;
@@ -255,6 +284,9 @@ impl Session {
     }
 
     fn on_answer(&mut self, request: u64, answer: Answer) -> Vec<Effect> {
+        if let Some((title, plugin, mode)) = self.take_activation(request) {
+            return self.on_activated(&title, plugin, mode, answer);
+        }
         let Some(source) = self
             .sources
             .iter_mut()
@@ -291,8 +323,14 @@ impl Session {
     }
 
     fn on_ran(&mut self, outcome: Result<(), String>) -> Vec<Effect> {
-        let Some(running) = self.running.take() else {
+        let Some(running) = self
+            .running
+            .take_if(|running| matches!(running.waiting, Waiting::Ran(_)))
+        else {
             return Vec::new();
+        };
+        let Waiting::Ran(after) = running.waiting else {
+            unreachable!("taken only while waiting for Ran");
         };
         match outcome {
             Err(error) => {
@@ -301,20 +339,121 @@ impl Session {
                 self.action_error = Some(format!("Couldn't run “{}”: {error}", running.title));
                 vec![self.state()]
             }
-            Ok(()) => match running.after {
-                After::Close => {
-                    let mut effects = self.end();
-                    effects.push(Effect::Send(Outgoing::Done));
-                    effects
-                }
-                After::Refresh => {
-                    self.action_error = None;
-                    let mut effects = self.ask_shown();
-                    effects.push(self.state());
-                    effects
-                }
+            Ok(()) => match after {
+                After::Close => self.done(),
+                After::Refresh => self.refresh(),
             },
         }
+    }
+
+    /// Applies a plugin's answer to the `activate` for a `plugin` action
+    /// (*Responses*): its `result` closes the launcher, or keeps it open,
+    /// replacing the text with `query` and asking for the items again on
+    /// `refresh`. An error keeps the items shown and becomes the state's
+    /// error.
+    ///
+    /// `query` is read as `input` would read it: literally in a mode, and in
+    /// the plain search a prefix at its start enters that mode. It's dropped
+    /// when the mode active at the `activate` (`mode`) is no longer, since
+    /// it was meant for that mode's text. Newer input in the same mode
+    /// doesn't drop it.
+    fn on_activated(
+        &mut self,
+        title: &str,
+        plugin: usize,
+        mode: Option<usize>,
+        answer: Answer,
+    ) -> Vec<Effect> {
+        let result = match answer {
+            Answer::Result(result) => result,
+            Answer::Failed(failure) => {
+                self.log
+                    .write(format_args!("couldn't run {title:?}: {failure}"));
+                // Unlike a list or query error (`failure_message`), the
+                // plugin's own message goes without its name: the action's
+                // title already says what failed.
+                let reason = match failure {
+                    Failure::Plugin(message) => message,
+                    failure => format!("{} {failure}", self.plugins[plugin].manifest.name),
+                };
+                self.action_error = Some(format!("Couldn't run “{title}”: {reason}"));
+                return vec![self.state()];
+            }
+            Answer::Items { .. } => {
+                unreachable!("the host turns items answering `activate` into a failure")
+            }
+        };
+        if result.closes() {
+            return self.done();
+        }
+        let ActivateResult { refresh, query, .. } = result;
+        self.action_error = None;
+        let mut effects = Vec::new();
+        let mut asked = false;
+        let current = self.mode.as_ref().map(|active| active.plugin);
+        match query {
+            Some(query) if current != mode => {
+                self.log.write(format_args!(
+                    "not replacing the text with {query:?} from {title:?}: \
+                     the mode changed since it was chosen"
+                ));
+            }
+            Some(query) => {
+                let (next, text) = match &self.mode {
+                    Some(active) => (Some(active.clone()), query),
+                    None => self.read_plain(query),
+                };
+                if next.as_ref().map(|active| active.plugin) != current {
+                    // Entering a mode asks its plugin, which is all a
+                    // refresh would ask now.
+                    effects.extend(self.leave());
+                    self.mode = next;
+                    self.text = text;
+                    effects.extend(self.enter());
+                    asked = true;
+                } else {
+                    self.text = text;
+                    if !refresh {
+                        effects.extend(self.query_if_changed());
+                    }
+                }
+            }
+            None => {}
+        }
+        if refresh && !asked {
+            effects.extend(self.ask_shown());
+        }
+        effects.push(self.state());
+        effects
+    }
+
+    /// Takes the running activation if `request` is its `activate`,
+    /// returning its title, plugin and the mode it was chosen in. It's
+    /// checked before the sources: ids are unique, so a match is always it.
+    fn take_activation(&mut self, request: u64) -> Option<(String, usize, Option<usize>)> {
+        let running = self.running.take_if(
+            |running| matches!(running.waiting, Waiting::Plugin { request: r, .. } if r == request),
+        )?;
+        let Waiting::Plugin { plugin, mode, .. } = running.waiting else {
+            unreachable!("taken only while waiting for this activation");
+        };
+        Some((running.title, plugin, mode))
+    }
+
+    /// Ends the session after an action ran, telling the frontend.
+    fn done(&mut self) -> Vec<Effect> {
+        let mut effects = self.end();
+        effects.push(Effect::Send(Outgoing::Done));
+        effects
+    }
+
+    /// Asks the shown plugins for their items again after an action, keeping
+    /// the launcher open.
+    fn refresh(&mut self) -> Vec<Effect> {
+        self.action_error = None;
+        let mut effects = self.ask_shown();
+        effects.push(self.state());
+        effects
     }
 
     /// Reads `input` in the frontend's mode (*Reading input as the user saw
@@ -333,16 +472,22 @@ impl Session {
                 };
                 (Some(Active { plugin, prefix }), text)
             }
-            None => match self.parse_prefix(&text) {
-                Some((plugin, len)) => {
-                    let prefix = Some(text[..len].to_owned());
-                    let rest = text[len..].trim_start().to_owned();
-                    (Some(Active { plugin, prefix }), rest)
-                }
-                None => (None, text),
-            },
+            None => self.read_plain(text),
         };
         self.switch(mode, text)
+    }
+
+    /// Reads `text` typed in the plain search: a prefix at its start enters
+    /// its mode, and whitespace right after the prefix is dropped.
+    fn read_plain(&self, text: String) -> (Option<Active>, String) {
+        match self.parse_prefix(&text) {
+            Some((plugin, len)) => {
+                let prefix = Some(text[..len].to_owned());
+                let rest = text[len..].trim_start().to_owned();
+                (Some(Active { plugin, prefix }), rest)
+            }
+            None => (None, text),
+        }
     }
 
     /// Makes `mode` the active mode with `text`, asking its plugin for
@@ -541,7 +686,7 @@ impl Session {
             ));
             return vec![self.state()];
         };
-        let (plugin, item) = match target {
+        let (plugin, item, recorded) = match target {
             Target::Hint(plugin) => {
                 if action_id != ENTER {
                     self.log.write(format_args!(
@@ -551,7 +696,11 @@ impl Session {
                 }
                 return self.enter_mode(plugin);
             }
-            Target::Item(plugin, item) => (plugin, item),
+            Target::Item {
+                plugin,
+                item,
+                recorded,
+            } => (plugin, item, recorded),
         };
         let Some((index, action)) = item
             .actions
@@ -570,20 +719,36 @@ impl Session {
             ));
             return vec![self.state()];
         }
-        if let Run::Plugin(_) = action.run {
-            self.log.write(format_args!(
-                "not running {item_ref:?}'s action {action_id:?}: \
-                 plugin actions aren't supported yet"
-            ));
-            return vec![self.state()];
+        let title = action.title.clone();
+        if let Run::Plugin(plugin_action) = &action.run {
+            // `after` is ignored: the plugin's `result` decides.
+            let params = ActivateParams {
+                item: recorded.is_none().then(|| item.id.clone()),
+                action: plugin_action.clone(),
+                text: recorded.unwrap_or_else(|| self.text.trim().to_owned()),
+            };
+            let id = self.next_request;
+            self.next_request += 1;
+            self.running = Some(Running {
+                title,
+                waiting: Waiting::Plugin {
+                    request: id,
+                    plugin,
+                    mode: self.mode.as_ref().map(|active| active.plugin),
+                },
+            });
+            return vec![Effect::Request {
+                plugin: self.plugins[plugin].clone(),
+                request: Request::new(id, Method::Activate(params)),
+            }];
         }
         let effect = Effect::Run {
             plugin: self.plugins[plugin].clone(),
             run: action.run.clone(),
         };
         self.running = Some(Running {
-            title: action.title.clone(),
-            after: action.after,
+            title,
+            waiting: Waiting::Ran(action.after),
         });
         vec![effect]
     }
@@ -605,7 +770,11 @@ impl Session {
                 return None;
             }
             let item = filled_query_item(found.manifest.query_item.as_ref()?, text);
-            return Some(Target::Item(active.plugin, item));
+            return Some(Target::Item {
+                plugin: active.plugin,
+                item: Box::new(item),
+                recorded: Some(text.to_owned()),
+            });
         }
         self.visible(&self.shown())
             .into_iter()
@@ -613,8 +782,13 @@ impl Session {
                 (Row::Item(source, index), Ref::Item { plugin, item }) => {
                     let source = &self.sources[source];
                     let found = &source.items[index];
-                    (self.plugins[source.plugin].id() == plugin && found.id == item)
-                        .then(|| Target::Item(source.plugin, found.clone()))
+                    (self.plugins[source.plugin].id() == plugin && found.id == item).then(|| {
+                        Target::Item {
+                            plugin: source.plugin,
+                            item: Box::new(found.clone()),
+                            recorded: None,
+                        }
+                    })
                 }
                 (Row::Hint(found), Ref::Hint { plugin }) => {
                     (self.plugins[found].id() == plugin).then_some(Target::Hint(found))
