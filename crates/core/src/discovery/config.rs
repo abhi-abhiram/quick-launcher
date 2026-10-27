@@ -19,17 +19,13 @@ pub struct Config {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct PluginConfig {
     /// Replaces the manifest's prefixes.
-    #[serde(default)]
     pub prefixes: Option<Vec<String>>,
 }
 
 impl Config {
     /// Parses `config.toml`'s text. The error is one line, for the log.
     pub fn parse(text: &str) -> Result<Config, String> {
-        toml::from_str(text).map_err(|error| {
-            let message = error.to_string();
-            message.lines().last().unwrap_or_default().trim().to_owned()
-        })
+        toml::from_str(text).map_err(|error| super::manifest::one_line(&error))
     }
 
     pub fn is_disabled(&self, id: &str) -> bool {

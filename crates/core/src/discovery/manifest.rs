@@ -61,11 +61,8 @@ pub enum Lifetime {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct QueryItem {
     pub label: String,
-    #[serde(default)]
     pub detail: Option<String>,
-    #[serde(default)]
     pub icon: Option<Icon>,
-    #[serde(default)]
     pub badge: Option<String>,
     /// At least one; the first is the default action.
     pub actions: Vec<Action>,
@@ -98,12 +95,9 @@ impl fmt::Display for ManifestError {
 struct Raw {
     id: String,
     name: String,
-    #[serde(default)]
     description: Option<String>,
-    #[serde(default)]
     icon: Option<Icon>,
     prefixes: Vec<String>,
-    #[serde(default)]
     placeholder: Option<String>,
     bin: String,
     #[serde(default)]
@@ -116,7 +110,6 @@ struct Raw {
     env: Env,
     #[serde(default = "default_timeout_ms")]
     timeout_ms: u64,
-    #[serde(default)]
     query_item: Option<QueryItem>,
 }
 
@@ -222,12 +215,18 @@ fn is_file_name(name: &str) -> bool {
     !name.is_empty() && name != "." && name != ".." && !name.contains('/')
 }
 
-fn invalid(error: impl fmt::Display) -> ManifestError {
-    // toml's messages span several lines with a source excerpt; the log
-    // wants one.
-    let message = error.to_string();
-    let message = message.lines().last().unwrap_or_default().trim();
-    ManifestError::Invalid(message.to_owned())
+fn invalid(error: toml::de::Error) -> ManifestError {
+    ManifestError::Invalid(one_line(&error))
+}
+
+/// toml's message without the source excerpt its `Display` adds, so the log
+/// gets one line.
+pub(crate) fn one_line(error: &toml::de::Error) -> String {
+    error
+        .message()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn rule(reason: impl Into<String>) -> ManifestError {
