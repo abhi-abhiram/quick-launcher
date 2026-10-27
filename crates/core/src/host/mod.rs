@@ -173,6 +173,10 @@ impl fmt::Display for Failure {
 /// `request` must be one that has a response, so not `cancel`. Dropping the
 /// future kills the process.
 pub async fn oneshot(launch: &Launch, request: &Request, mut answer: impl FnMut(Answer)) {
+    debug_assert!(
+        !matches!(request.method, Method::Cancel(_)),
+        "cancel has no response, so it can't be sent to a oneshot plugin"
+    );
     let mut child = match launch.start() {
         Ok(child) => child,
         Err(error) => {
@@ -231,7 +235,7 @@ pub async fn oneshot(launch: &Launch, request: &Request, mut answer: impl FnMut(
                 }
                 deadline = Instant::now() + launch.timeout;
             }
-            Some(line) = next_stderr(&mut stderr) => forward(launch, line),
+            Some(line) = next_stderr(launch, &mut stderr) => forward(launch, line),
             () = sleep_until(deadline) => {
                 timed_out(launch, child, &mut stderr, &mut answer).await;
                 return;
@@ -272,7 +276,7 @@ async fn reap(
     let status = loop {
         tokio::select! {
             status = child.wait() => break status,
-            Some(line) = next_stderr(stderr) => forward(launch, line),
+            Some(line) = next_stderr(launch, stderr) => forward(launch, line),
             () = sleep_until(deadline) => {
                 launch.log(format_args!(
                     "still running {} ms after answering; stopping it",
@@ -284,7 +288,7 @@ async fn reap(
         }
     };
     let rest = async {
-        while let Some(line) = next_stderr(stderr).await {
+        while let Some(line) = next_stderr(launch, stderr).await {
             forward(launch, line);
         }
     };
@@ -300,12 +304,20 @@ async fn reap(
 
 /// The next stderr line, or `None` once stderr has ended. Lines too long
 /// to keep are replaced by a note.
-async fn next_stderr(stderr: &mut Option<Lines<impl AsyncRead + Unpin>>) -> Option<Vec<u8>> {
+async fn next_stderr(
+    launch: &Launch,
+    stderr: &mut Option<Lines<impl AsyncRead + Unpin>>,
+) -> Option<Vec<u8>> {
     let lines = stderr.as_mut()?;
     match lines.next().await {
         Ok(Some(line)) => Some(line),
         Err(FrameError::TooLong) => Some(b"(a line too long to log)".to_vec()),
-        Ok(None) | Err(_) => {
+        Ok(None) => {
+            *stderr = None;
+            None
+        }
+        Err(error) => {
+            launch.log(format_args!("can't read its stderr: {error}"));
             *stderr = None;
             None
         }
@@ -357,11 +369,13 @@ fn read_response(launch: &Launch, request: &Request, line: &[u8]) -> Option<Answ
     }
     let wants_items = matches!(request.method, Method::List(_) | Method::Query(_));
     match (raw.items, raw.result, raw.error) {
+        // An error ends the request, whatever its `more` says.
         (None, None, Some(error)) => Some(Answer::Failed(Failure::Plugin(error.message))),
         (Some(items), None, None) if wants_items => Some(Answer::Items {
             items: checked_items(launch, items),
             more: raw.more,
         }),
+        (None, Some(_), None) if raw.more => invalid(&"only items can be a partial answer"),
         (None, Some(result), None) if !wants_items => Some(Answer::Result(result)),
         (None, None, None) => invalid(&"it has none of items, result or error"),
         (Some(_), None, None) | (None, Some(_), None) => invalid(&format_args!(

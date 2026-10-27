@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use quick_launcher_core_fixtures::{hang, item};
+use quick_launcher_core_fixtures::{hang, item, write_pid};
 use quick_launcher_plugin::{Item, Plugin, Query};
 
 static LINGER: AtomicBool = AtomicBool::new(false);
@@ -29,6 +29,7 @@ impl Plugin for Slow {
 }
 
 fn main() {
+    write_pid();
     quick_launcher_plugin::run(Slow);
     if LINGER.load(Ordering::Relaxed) {
         hang()

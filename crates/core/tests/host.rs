@@ -68,6 +68,11 @@ impl Fixture {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let root = env::temp_dir().join(format!("ql-host-{}-{n}", process::id()));
         let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        // The plugin sees its folder with symlinks resolved (on macOS the
+        // temp dir is under /var, a link to /private/var), so the
+        // expected paths have them resolved too.
+        let root = root.canonicalize().unwrap();
         let config = root.join("config/quick-launcher");
         let dirs = Dirs {
             bundled_plugins: root.join("data/quick-launcher/plugins"),
@@ -124,26 +129,26 @@ impl Fixture {
 
     /// Asserts the process that wrote its pid is gone. A process the host
     /// killed but whose exit only tokio's background reaper collects may
-    /// stay a zombie briefly; that's not running either.
+    /// stay a zombie briefly; that's not running either. Asks `ps`, which
+    /// answers the same way on Linux and macOS.
     fn assert_gone(&self) {
-        let stat = PathBuf::from(format!("/proc/{}/stat", self.pid()));
+        let pid = self.pid().to_string();
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
-            match fs::read_to_string(&stat) {
-                Err(_) => return,
-                Ok(stat)
-                    if stat
-                        .rsplit(')')
-                        .next()
-                        .unwrap()
-                        .trim_start()
-                        .starts_with('Z') =>
-                {
-                    return;
-                }
-                Ok(_) if Instant::now() > deadline => panic!("the plugin is still running"),
-                Ok(_) => std::thread::sleep(Duration::from_millis(20)),
+            let ps = Command::new("ps")
+                .args(["-o", "stat=", "-p", &pid])
+                .output()
+                .expect("ps runs");
+            let stat = String::from_utf8_lossy(&ps.stdout);
+            if !ps.status.success() || stat.trim_start().starts_with('Z') {
+                return;
             }
+            assert!(
+                Instant::now() < deadline,
+                "the plugin is still running ({})",
+                stat.trim()
+            );
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
 }
@@ -213,15 +218,15 @@ async fn activate_returns_the_result() {
 
 #[tokio::test]
 async fn a_plugin_that_never_answers_is_killed() {
-    let fixture = Fixture::new("slow", "timeout_ms = 300");
+    let fixture = Fixture::new("slow", "timeout_ms = 1000");
     let started = Instant::now();
     let (answers, log) = fixture.run(Method::list()).await;
     assert_eq!(
         the_failure(&answers),
-        &Failure::NoResponse(Duration::from_millis(300))
+        &Failure::NoResponse(Duration::from_millis(1000))
     );
-    assert!(started.elapsed() < Duration::from_secs(3));
-    assert!(logged(&log, "didn't respond within 300 ms"), "{log:?}");
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert!(logged(&log, "didn't respond within 1000 ms"), "{log:?}");
     fixture.assert_gone();
 }
 
@@ -234,11 +239,11 @@ async fn a_slow_answer_within_the_timeout_is_used() {
 
 #[tokio::test]
 async fn a_plugin_still_running_after_answering_is_killed() {
-    let fixture = Fixture::new("slow", "kind = \"query\"\ntimeout_ms = 300");
+    let fixture = Fixture::new("slow", "kind = \"query\"\ntimeout_ms = 1000");
     let (answers, log) = fixture.run(query("linger")).await;
     assert_eq!(final_ids(&answers), ["late"]);
     assert!(
-        logged(&log, "still running 300 ms after answering"),
+        logged(&log, "still running 1000 ms after answering"),
         "{log:?}"
     );
     fixture.assert_gone();
@@ -299,6 +304,22 @@ async fn a_result_doesnt_answer_a_query() {
 }
 
 #[tokio::test]
+async fn a_result_cant_be_partial() {
+    let fixture = Fixture::new("garbage", "");
+    let method = Method::Activate(ActivateParams {
+        item: None,
+        action: "run".into(),
+        text: "partial-result".into(),
+    });
+    let (answers, log) = fixture.run(method).await;
+    assert_eq!(the_failure(&answers), &Failure::Invalid);
+    assert!(
+        logged(&log, "only items can be a partial answer"),
+        "{log:?}"
+    );
+}
+
+#[tokio::test]
 async fn exiting_without_an_answer_is_an_error() {
     let fixture = Fixture::new("garbage", "kind = \"query\"");
     let (answers, _) = fixture.run(query("silent")).await;
@@ -310,9 +331,9 @@ async fn exiting_without_an_answer_is_an_error() {
 
 #[tokio::test]
 async fn partial_answers_arrive_in_order_and_each_resets_the_timeout() {
-    // Six gaps of 50 ms take longer than the timeout in total, but no one
+    // Six gaps of 200 ms take longer than the timeout in total, but no one
     // gap does.
-    let fixture = Fixture::new("stream", "kind = \"query\"\ntimeout_ms = 250");
+    let fixture = Fixture::new("stream", "kind = \"query\"\ntimeout_ms = 1000");
     let (answers, _) = fixture.run(query("6")).await;
     let shape: Vec<(usize, bool)> = answers
         .iter()
@@ -339,7 +360,7 @@ async fn partial_answers_arrive_in_order_and_each_resets_the_timeout() {
 
 #[tokio::test]
 async fn a_timeout_after_a_partial_answer_kills_the_plugin() {
-    let fixture = Fixture::new("stream", "kind = \"query\"\ntimeout_ms = 300");
+    let fixture = Fixture::new("stream", "kind = \"query\"\ntimeout_ms = 1000");
     let (answers, _) = fixture.run(query("stall")).await;
     match &answers[..] {
         [

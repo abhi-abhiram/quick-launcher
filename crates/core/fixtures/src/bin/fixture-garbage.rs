@@ -7,6 +7,8 @@
 //!   actions, one with two `run` forms, and one good item.
 //! - `other-id`: a response to another request, then the real one.
 //! - `result`: a `result`, which doesn't answer a query.
+//! - `partial-result`: a `result` with `more: true`, which no answer to
+//!   `activate` may have. Sent as an `activate` request's text.
 //! - `silent`: exits without answering.
 
 use std::io::{self, BufRead, Write};
@@ -41,6 +43,9 @@ fn main() {
                 .to_string(),
         ],
         "result" => vec![json!({"v": 1, "id": id, "result": {"close": true}}).to_string()],
+        "partial-result" => {
+            vec![json!({"v": 1, "id": id, "result": {"close": true}, "more": true}).to_string()]
+        }
         "silent" => vec![],
         other => panic!("unknown text {other:?}"),
     };
