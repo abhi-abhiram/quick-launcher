@@ -1,0 +1,11 @@
+protocol = 1
+id = "pi"
+name = "pi"
+description = "Open pi in a project"
+icon = "π"
+prefixes = ["pi:"]
+placeholder = "Open pi in…"
+bin = "pi-plugin"
+kind = "list"
+lifetime = "oneshot"
+env = "login"
