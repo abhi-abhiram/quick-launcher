@@ -16,7 +16,7 @@ CHECKS = [
     ["cargo", "clippy", "--all-targets", "--", "-D", "warnings"],
     ["cargo", "test"],
     # The recording platform reaches the binary only through this feature.
-    ["cargo", "check", "-p", "quick-launcher-core", "--all-targets", "--features", "recording-platform"],
+    ["cargo", "clippy", "-p", "quick-launcher-core", "--all-targets", "--features", "recording-platform", "--", "-D", "warnings"],
     # v0 keeps passing until the switch to v1 deletes it.
     [sys.executable, "-m", "unittest", "discover", "-s", "tests"],
     ["node", "--test", "tests/test_model.mjs"],

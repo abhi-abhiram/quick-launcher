@@ -60,16 +60,14 @@ impl Platform for Omarchy {
         let mut child = command(&copy_argv(), &self.dirs.home)
             .stdin(Stdio::piped())
             .spawn()?;
-        let mut stdin = child.stdin.take().expect("stdin is piped");
-        let text = text.to_owned();
         // wl-copy reads all of stdin before it forks to serve the clipboard,
-        // so writing happens off the caller's thread too.
-        thread::spawn(move || {
-            let _ = stdin.write_all(text.as_bytes());
-            drop(stdin);
-            let _ = child.wait();
-        });
-        Ok(())
+        // so the text is written before returning: it isn't lost if the core
+        // exits right after, and a failed write is reported.
+        let mut stdin = child.stdin.take().expect("stdin is piped");
+        let written = stdin.write_all(text.as_bytes());
+        drop(stdin);
+        reap(child);
+        written
     }
 
     fn login_command(&self, argv: &[String]) -> Vec<String> {

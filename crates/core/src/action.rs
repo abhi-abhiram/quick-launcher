@@ -2,7 +2,7 @@
 //! *Environment* in `docs/protocol.md`).
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use quick_launcher_wire::Run;
 
@@ -48,7 +48,7 @@ pub fn run_action(
         Run::Exec { argv, cwd } => {
             let mut argv = non_empty(argv)?.to_vec();
             if has_relative_path(&argv[0]) {
-                argv[0] = plugin.dir.join(&argv[0]).to_string_lossy().into_owned();
+                argv[0] = in_plugin_dir(plugin.dir, &argv[0]);
             }
             let argv = wrap(platform, plugin, argv);
             platform.spawn(&argv, Some(&cwd_or_home(cwd.as_deref(), home)))
@@ -65,6 +65,15 @@ pub fn run_action(
             format!("plugin action {action:?} is sent to the plugin, not run by the platform"),
         )),
     }
+}
+
+/// `program` joined to the plugin folder, without its `.` components.
+fn in_plugin_dir(dir: &Path, program: &str) -> String {
+    let relative: PathBuf = Path::new(program)
+        .components()
+        .filter(|component| *component != Component::CurDir)
+        .collect();
+    dir.join(relative).to_string_lossy().into_owned()
 }
 
 fn has_relative_path(program: &str) -> bool {
@@ -188,7 +197,7 @@ mod tests {
     fn relative_exec_paths_resolve_against_the_plugin_folder() {
         assert_eq!(
             calls(exec(&["./run.sh", "./arg"], None), PluginEnv::Session),
-            [spawned(&["/plugins/tools/./run.sh", "./arg"], HOME)]
+            [spawned(&["/plugins/tools/run.sh", "./arg"], HOME)]
         );
         assert_eq!(
             calls(exec(&["bin/tool"], None), PluginEnv::Session),
