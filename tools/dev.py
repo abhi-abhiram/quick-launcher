@@ -11,10 +11,12 @@ real platform, so activating an app really launches it.
     > !1                run item 1's default action (!!1: its alternate)
     > repo:             a prefix enters a mode; the prompt shows it
     Repos> <            leave the mode
+    > rep               mode hints are listed with the items
+    > \\t               enter the first hint's mode (\\t2: item 2's)
 
 Each line is the whole text typed in the prompt's mode. `<` sends
-leave_mode, `\\t` (or a tab) sends complete, and an empty line clears the
-text. Ctrl+D quits.
+leave_mode, `\\t` (or a tab) sends complete, `\\tN` sends it with item N
+selected, and an empty line clears the text. Ctrl+D quits.
 """
 
 import argparse
@@ -110,10 +112,22 @@ def print_messages():
 def send(command):
     """Sends one line typed at the prompt. Returns whether a state answers
     it."""
-    if command in ("\\t", "\t"):
-        # Nothing to complete until mode hints (M10), so no state comes back.
-        client.send("complete")
-        return False
+    if command.startswith(("\\t", "\t")):
+        number = command.removeprefix("\\t").removeprefix("\t")
+        fields = {}
+        if number:
+            item = numbered_item(number)
+            if not item:
+                return False
+            fields["item"] = item["ref"]
+        client.send("complete", **fields)
+        # The core answers only when there's a hint to complete. Refs are
+        # opaque, so this peeks at a hint's one action, `enter`, just to
+        # know whether to wait for a state.
+        items = (client.state or {}).get("items", [])
+        return client.mode is None and any(
+            action["id"] == "enter" for item in items for action in item["actions"]
+        )
     elif command == "<":
         client.send("leave_mode")
         return client.mode is not None  # the core ignores it outside a mode
@@ -127,13 +141,20 @@ def send(command):
     return True
 
 
-def item_action(command):
-    alternate = command.startswith("!!")
-    number = command[2:] if alternate else command[1:]
+def numbered_item(number):
+    """Item `number` (from 1) of the last state, or `None` after saying
+    there's no such item."""
     try:
-        item = client.state["items"][int(number) - 1]
+        return client.state["items"][int(number) - 1]
     except (TypeError, ValueError, IndexError):
         print(f"no item {number!r}")
+        return None
+
+
+def item_action(command):
+    alternate = command.startswith("!!")
+    item = numbered_item(command[2:] if alternate else command[1:])
+    if not item:
         return None
     actions = item["actions"]
     index = 1 if alternate else 0
