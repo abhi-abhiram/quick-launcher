@@ -12,3 +12,5 @@ recording-platform = []
 
 [dependencies]
 quick-launcher-wire.workspace = true
+serde.workspace = true
+toml.workspace = true
