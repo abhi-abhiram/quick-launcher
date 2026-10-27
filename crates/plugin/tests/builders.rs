@@ -189,7 +189,8 @@ fn outcomes() {
         ActivateResult {
             close: true,
             refresh: false,
-            query: None
+            query: None,
+            run: None,
         }
     );
     let refresh = result(Outcome::refresh());
@@ -197,6 +198,13 @@ fn outcomes() {
     let query = result(Outcome::query("pi: "));
     assert_eq!(query.query.as_deref(), Some("pi: "));
     assert!(!query.closes());
+
+    let run = result(Outcome::close().run(Run::terminal(["ls"]).cwd("/tmp")));
+    assert!(run.closes());
+    assert_eq!(
+        serde_json::to_value(&run).unwrap(),
+        json!({"close": true, "run": {"terminal": ["ls"], "cwd": "/tmp"}})
+    );
 }
 
 fn open(id: &str) -> Item {

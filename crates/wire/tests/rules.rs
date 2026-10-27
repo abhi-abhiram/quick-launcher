@@ -72,7 +72,8 @@ fn missing_optional_fields_take_defaults() {
         ActivateResult {
             close: true,
             refresh: false,
-            query: None
+            query: None,
+            run: None,
         }
     );
     assert!(result.closes());

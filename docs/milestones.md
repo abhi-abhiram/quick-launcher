@@ -501,6 +501,10 @@ v0*)
 - History lives in `QL_STATE_DIR`, with the same v0 fallback and
   carry-forward rule as pi.
 - Manifest: prefixes `>` and `term:`.
+- A `plugin` action's `result` can carry a `run` the core starts before
+  applying the rest (`Outcome::run` in the SDK). Without it, an action
+  could record a command or open it in a terminal, not both. Running a
+  history item uses it too, so the command moves to the top, as in v0.
 
 **Done when** `tests/test_terminal_mode.py`'s cases are ported and pass,
 plus the migration cases, and `>` works in `tools/dev.py`.

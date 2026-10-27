@@ -453,7 +453,7 @@ user triggers them is up to the frontend (see
 | `{"app": "<app id>"}` | Launch an installed app by its platform id (a desktop entry id such as `firefox.desktop` on Omarchy). Used by `apps`. |
 | `{"open": "url or path"}` | Open with the default handler. |
 | `{"copy": "text"}` | Put text on the clipboard. |
-| `{"plugin": "<action id>"}` | Send `activate` to the plugin and apply its `result`. |
+| `{"plugin": "<action id>"}` | Send `activate` to the plugin and apply its `result`, which can name another form to run. |
 
 `cwd` is optional and defaults to the home folder; a relative `cwd`
 resolves against the home folder. In `exec`, a relative program path (the
@@ -614,6 +614,13 @@ Every response has `v` and echoes the request `id`.
     prefix at its start enters that mode. If the active mode (or the plain
     search) is no longer the one the action was chosen in, `query` is
     dropped; `refresh` still applies.
+  - `run` (a [run](#actions), optional): run this first, as the plugin's
+    own action would run it (`cwd`, relative paths and `env = "login"`
+    apply the same way), then apply the rest of the result. It lets one
+    action change the plugin's data and start something, as the terminal
+    plugin's "run" records a command and opens it. It can't be another
+    `plugin` run. If it fails, the launcher stays open and shows the error,
+    as for any action that fails.
 
   The core applies only the newest activation's `result`: a newer
   `activate`, or `close` or `open`, drops the answer to an older one.

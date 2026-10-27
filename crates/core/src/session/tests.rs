@@ -1677,6 +1677,7 @@ fn result(close: bool, refresh: bool, query: Option<&str>) -> Answer {
         close,
         refresh,
         query: query.map(Into::into),
+        run: None,
     })
 }
 
@@ -1900,6 +1901,73 @@ fn an_activate_error_keeps_the_items_and_shows_until_the_next_input() {
         only_state(test.answer(id, crash)).error.as_deref(),
         Some("Couldn't run “PIN”: APPS stopped without answering")
     );
+}
+
+fn with_run(answer: Answer, run: Run) -> Answer {
+    let Answer::Result(result) = answer else {
+        panic!("{answer:?}")
+    };
+    Answer::Result(ActivateResult {
+        run: Some(run),
+        ..result
+    })
+}
+
+#[test]
+fn a_run_in_a_result_runs_from_the_plugin_then_the_result_applies() {
+    let (mut test, _) = with_pinnable();
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    let terminal = Run::Terminal {
+        argv: vec!["ls".into()],
+        cwd: None,
+    };
+    let effects = test.answer(id, with_run(result(true, false, None), terminal.clone()));
+    let [Effect::Run { plugin, run }] = &effects[..] else {
+        panic!("{effects:?}")
+    };
+    assert_eq!((plugin.id(), run), ("apps", &terminal));
+    assert_eq!(
+        test.session.handle(Event::Ran(Ok(()))),
+        [Effect::Send(Outgoing::Done)]
+    );
+
+    // With `refresh`, the launcher stays open once it ran.
+    let mut test = with_pinnable().0;
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    let effects = test.answer(id, with_run(result(false, true, None), terminal));
+    assert!(matches!(&effects[..], [Effect::Run { .. }]), "{effects:?}");
+    let effects = test.session.handle(Event::Ran(Ok(())));
+    assert_eq!(requests(&effects), [("apps", &Method::list())]);
+}
+
+#[test]
+fn a_run_in_a_result_that_fails_keeps_the_launcher_open_with_the_error() {
+    let (mut test, _) = with_pinnable();
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    let copy = Run::Copy("b".into());
+    test.answer(id, with_run(result(true, false, None), copy));
+    let state = only_state(test.session.handle(Event::Ran(Err("no wl-copy".into()))));
+    assert_eq!(
+        state.error.as_deref(),
+        Some("Couldn't run “PIN”: no wl-copy")
+    );
+    assert_eq!(refs(&state), ["apps/b"]);
+}
+
+#[test]
+fn a_plugin_run_in_a_result_runs_nothing() {
+    let (mut test, _) = with_pinnable();
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    let effects = test.answer(
+        id,
+        with_run(result(true, false, None), Run::Plugin("pin".into())),
+    );
+    let state = only_state(effects);
+    assert_eq!(
+        state.error.as_deref(),
+        Some("Couldn't run “PIN”: APPS answered with another plugin action")
+    );
+    assert_eq!(test.session.handle(Event::Ran(Ok(()))), []);
 }
 
 #[test]

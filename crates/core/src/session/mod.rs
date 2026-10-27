@@ -150,10 +150,10 @@ struct Running {
 }
 
 /// What a running action waits for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Waiting {
-    /// [`Event::Ran`] for a platform run, then does what `after` says.
-    Ran(After),
+    /// [`Event::Ran`] for a platform run, then does what [`Then`] says.
+    Ran(Then),
     /// The answer to the `activate` request with this id, for a `plugin`
     /// run, from this plugin (an index into the session's plugins). Its
     /// `result` decides what happens next. `mode` is the active mode's
@@ -166,6 +166,19 @@ enum Waiting {
     Plugin {
         request: u64,
         plugin: usize,
+        mode: Option<usize>,
+    },
+}
+
+/// What happens once a platform run has run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Then {
+    /// What the action's `after` says.
+    After(After),
+    /// The rest of the plugin `result` that asked for the run, whose
+    /// `activate` was sent while `mode` was active (see [`Waiting::Plugin`]).
+    Result {
+        result: ActivateResult,
         mode: Option<usize>,
     },
 }
@@ -329,7 +342,7 @@ impl Session {
         else {
             return Vec::new();
         };
-        let Waiting::Ran(after) = running.waiting else {
+        let Waiting::Ran(then) = running.waiting else {
             unreachable!("taken only while waiting for Ran");
         };
         match outcome {
@@ -339,24 +352,20 @@ impl Session {
                 self.action_error = Some(format!("Couldn't run “{}”: {error}", running.title));
                 vec![self.state()]
             }
-            Ok(()) => match after {
-                After::Close => self.done(),
-                After::Refresh => self.refresh(),
+            Ok(()) => match then {
+                Then::After(After::Close) => self.done(),
+                Then::After(After::Refresh) => self.refresh(),
+                Then::Result { result, mode } => self.apply_result(&running.title, mode, result),
             },
         }
     }
 
     /// Applies a plugin's answer to the `activate` for a `plugin` action
-    /// (*Responses*): its `result` closes the launcher, or keeps it open,
-    /// replacing the text with `query` and asking for the items again on
-    /// `refresh`. An error keeps the items shown and becomes the state's
-    /// error.
-    ///
-    /// `query` is read as `input` would read it: literally in a mode, and in
-    /// the plain search a prefix at its start enters that mode. It's dropped
-    /// when the mode active at the `activate` (`mode`) is no longer, since
-    /// it was meant for that mode's text. Newer input in the same mode
-    /// doesn't drop it.
+    /// (*Responses*). A `run` in its `result` runs first, as a platform
+    /// action from that plugin; once it has, the rest applies. A `run` that
+    /// fails, or names another `plugin` action, keeps the launcher open with
+    /// the error, like a failed action. An error answer keeps the items
+    /// shown and becomes the state's error.
     fn on_activated(
         &mut self,
         title: &str,
@@ -364,7 +373,7 @@ impl Session {
         mode: Option<usize>,
         answer: Answer,
     ) -> Vec<Effect> {
-        let result = match answer {
+        let mut result = match answer {
             Answer::Result(result) => result,
             Answer::Failed(failure) => {
                 self.log
@@ -383,6 +392,48 @@ impl Session {
                 unreachable!("the host turns items answering `activate` into a failure")
             }
         };
+        match result.run.take() {
+            None => self.apply_result(title, mode, result),
+            Some(Run::Plugin(action)) => {
+                // Answering with another `plugin` action could loop forever.
+                self.log.write(format_args!(
+                    "not running {title:?}: its result asks for plugin action {action:?}, \
+                     and a result can only ask for a platform run"
+                ));
+                self.action_error = Some(format!(
+                    "Couldn't run “{title}”: {} answered with another plugin action",
+                    self.plugins[plugin].manifest.name
+                ));
+                vec![self.state()]
+            }
+            Some(run) => {
+                self.running = Some(Running {
+                    title: title.to_owned(),
+                    waiting: Waiting::Ran(Then::Result { result, mode }),
+                });
+                vec![Effect::Run {
+                    plugin: self.plugins[plugin].clone(),
+                    run,
+                }]
+            }
+        }
+    }
+
+    /// Applies a plugin's `result` once any `run` in it has run: it closes
+    /// the launcher, or keeps it open, replacing the text with `query` and
+    /// asking for the items again on `refresh`.
+    ///
+    /// `query` is read as `input` would read it: literally in a mode, and in
+    /// the plain search a prefix at its start enters that mode. It's dropped
+    /// when the mode active at the `activate` (`mode`) is no longer, since
+    /// it was meant for that mode's text. Newer input in the same mode
+    /// doesn't drop it.
+    fn apply_result(
+        &mut self,
+        title: &str,
+        mode: Option<usize>,
+        result: ActivateResult,
+    ) -> Vec<Effect> {
         if result.closes() {
             return self.done();
         }
@@ -748,7 +799,7 @@ impl Session {
         };
         self.running = Some(Running {
             title,
-            waiting: Waiting::Ran(action.after),
+            waiting: Waiting::Ran(Then::After(action.after)),
         });
         vec![effect]
     }
