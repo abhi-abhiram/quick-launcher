@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -185,6 +186,53 @@ class Versions(Core):
         self.assertIsNone(client.recv(), "the core closes stdout")
         self.assertNotEqual(client.process.wait(10), 0)
         self.assertIn("speaks frontend protocol 2", self.log_text())
+
+
+    def test_an_invalid_hello_gets_ready_then_eof_and_a_failure(self):
+        client = self.start()
+        client.write({"type": "hello"})
+        self.assertEqual(client.recv()["type"], "ready")
+        self.assertIsNone(client.recv())
+        self.assertNotEqual(client.process.wait(10), 0)
+
+
+class Help(unittest.TestCase):
+    def test_help_prints_usage_and_exits_zero(self):
+        result = subprocess.run(
+            [str(BINS / "quick-launcher-core"), "--help"], capture_output=True, text=True, timeout=10
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("usage:", result.stdout)
+
+
+class Shutdown(Core):
+    def test_eof_with_a_request_outstanding_exits_promptly_and_stops_the_plugin(self):
+        self.add_plugin("slow", "slow", "global = true\ntimeout_ms = 600000")
+        client = self.ready()
+        client.open()
+        self.assertTrue(client.wait_for(lambda m: m["type"] == "state")["loading"])
+        pid_file = self.home / "state/quick-launcher/slow/pid"
+        deadline = time.monotonic() + 10
+        while not pid_file.exists():
+            self.assertLess(time.monotonic(), deadline, "the slow plugin never started")
+            time.sleep(0.01)
+        pid = int(pid_file.read_text())
+        started = time.monotonic()
+        self.assertEqual(client.finish(timeout=5), 0)
+        self.assertLess(time.monotonic() - started, 3)
+        deadline = time.monotonic() + 5
+        while running(pid):
+            self.assertLess(time.monotonic(), deadline, f"plugin process {pid} is still running")
+            time.sleep(0.01)
+
+
+def running(pid):
+    """Whether `pid` is a live process (not gone, and not a zombie)."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
+        return False
+    return stat.rsplit(")", 1)[1].split()[0] != "Z"
 
 
 class Errors(Core):

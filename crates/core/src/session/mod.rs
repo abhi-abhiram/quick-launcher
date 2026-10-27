@@ -27,6 +27,10 @@ pub enum Event {
     Answer { request: u64, answer: Answer },
     /// The action the last [`Effect::Run`] asked for ran, or couldn't.
     Ran(Result<(), String>),
+    /// A rescan found these plugins, in discovery order. The session in
+    /// progress ends, since its items came from the old ones; the main loop
+    /// sends this right before the `open` that triggered the rescan.
+    Plugins(Vec<Plugin>),
 }
 
 /// Something for the main loop to do, in order.
@@ -98,17 +102,17 @@ impl Session {
         }
     }
 
-    /// Replaces the plugins after a rescan. Takes effect on the next
-    /// `open`, which the main loop sends right after.
-    pub fn set_plugins(&mut self, plugins: Vec<Plugin>) {
-        self.plugins = plugins;
-    }
-
     pub fn handle(&mut self, event: Event) -> Vec<Effect> {
         match event {
             Event::Frontend(message) => self.on_message(message),
             Event::Answer { request, answer } => self.on_answer(request, answer),
             Event::Ran(outcome) => self.on_ran(outcome),
+            Event::Plugins(plugins) => {
+                // Sources index into the plugins, so they go with them.
+                let effects = self.end();
+                self.plugins = plugins;
+                effects
+            }
         }
     }
 
@@ -135,6 +139,18 @@ impl Session {
                     .write(format_args!("frontend: {client} {client_version}"));
                 self.max_items = max_items;
                 vec![ready]
+            }
+            Incoming::InvalidHello { reason } => {
+                // Still a `ready`, so the frontend learns the core's major
+                // before it sees EOF.
+                self.log
+                    .write(format_args!("invalid hello ({reason}); exiting"));
+                vec![
+                    Effect::Send(Outgoing::Ready {
+                        core_version: env!("CARGO_PKG_VERSION").to_owned(),
+                    }),
+                    Effect::Exit(1),
+                ]
             }
             Incoming::Open { mode } => {
                 if let Some(mode) = mode {
@@ -334,6 +350,8 @@ impl Session {
                     error: None,
                 });
             source.pending = Some(id);
+            source.partial = false;
+            source.error = None;
             sources.push(source);
             effects.push(Effect::Request {
                 plugin: self.plugins[plugin].clone(),

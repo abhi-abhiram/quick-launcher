@@ -5,7 +5,7 @@
 //! The frontend writes to stdin and reads stdout; stderr is the log. EOF
 //! on stdin ends the core with status 0.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -37,17 +37,28 @@ struct Options {
     bundled_plugins: Option<PathBuf>,
 }
 
-fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, String> {
+/// Why the core doesn't run with these arguments.
+#[derive(Debug, PartialEq, Eq)]
+enum NotRun {
+    /// `--help`: print the usage and exit 0.
+    Help,
+    /// A bad argument, with the message to print before exiting 2.
+    Usage(String),
+}
+
+fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, NotRun> {
     let mut options = Options::default();
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--bundled-plugins") => {
-                let dir = args.next().ok_or("--bundled-plugins needs a directory")?;
+                let dir = args.next().ok_or_else(|| {
+                    NotRun::Usage(format!("--bundled-plugins needs a directory\n{USAGE}"))
+                })?;
                 options.bundled_plugins = Some(PathBuf::from(dir));
             }
-            Some("-h" | "--help") => return Err(USAGE.to_owned()),
-            _ => return Err(format!("unknown argument {arg:?}\n{USAGE}")),
+            Some("-h" | "--help") => return Err(NotRun::Help),
+            _ => return Err(NotRun::Usage(format!("unknown argument {arg:?}\n{USAGE}"))),
         }
     }
     Ok(options)
@@ -58,7 +69,11 @@ pub fn main() -> ExitCode {
     let log = Log::stderr();
     let options = match parse_args(std::env::args_os().skip(1)) {
         Ok(options) => options,
-        Err(message) => {
+        Err(NotRun::Help) => {
+            println!("{USAGE}");
+            return ExitCode::SUCCESS;
+        }
+        Err(NotRun::Usage(message)) => {
             eprintln!("{message}");
             return ExitCode::from(2);
         }
@@ -106,16 +121,18 @@ async fn run(platform: Box<dyn Platform + Send + Sync>, log: Log) -> u8 {
     let mut stdin = Lines::new(tokio::io::stdin());
 
     loop {
-        let event = tokio::select! {
+        let events = tokio::select! {
             line = stdin.next() => match line {
                 Ok(Some(line)) if line.iter().all(u8::is_ascii_whitespace) => continue,
                 Ok(Some(line)) => match Incoming::parse(&line) {
                     Ok(message) => {
+                        let mut events = Vec::new();
                         if matches!(message, Incoming::Open { .. }) && registry.rescan_if_changed() {
                             log_warnings(&log, registry.warnings());
-                            session.set_plugins(registry.plugins().to_vec());
+                            events.push(Event::Plugins(registry.plugins().to_vec()));
                         }
-                        Event::Frontend(message)
+                        events.push(Event::Frontend(message));
+                        events
                     }
                     Err(Unread::UnknownType(kind)) => {
                         log.write(format_args!("ignoring a message of unknown type {kind:?}"));
@@ -140,12 +157,12 @@ async fn run(platform: Box<dyn Platform + Send + Sync>, log: Log) -> u8 {
                 if answer.is_final() {
                     requests.remove(&request);
                 }
-                Event::Answer { request, answer }
+                vec![Event::Answer { request, answer }]
             }
         };
 
-        let mut pending = vec![event];
-        while let Some(event) = pending.pop() {
+        let mut pending = VecDeque::from(events);
+        while let Some(event) = pending.pop_front() {
             for effect in session.handle(event) {
                 match effect {
                     Effect::Send(message) => {
@@ -174,7 +191,7 @@ async fn run(platform: Box<dyn Platform + Send + Sync>, log: Log) -> u8 {
                     Effect::Run { plugin, run } => {
                         let outcome = run_action(&*platform, &run, plugin.plugin_ref())
                             .map_err(|error| error.to_string());
-                        pending.push(Event::Ran(outcome));
+                        pending.push_back(Event::Ran(outcome));
                     }
                     Effect::Exit(code) => return u8::try_from(code).unwrap_or(1),
                 }
@@ -201,7 +218,7 @@ fn log_warnings(log: &Log, warnings: &[discovery::Warning]) {
 mod tests {
     use super::*;
 
-    fn args(args: &[&str]) -> Result<Options, String> {
+    fn args(args: &[&str]) -> Result<Options, NotRun> {
         parse_args(args.iter().map(OsString::from))
     }
 
@@ -218,11 +235,20 @@ mod tests {
                 bundled_plugins: Some("target/plugins".into())
             })
         );
-        assert!(args(&["--bundled-plugins"]).is_err());
+        assert!(matches!(
+            args(&["--bundled-plugins"]),
+            Err(NotRun::Usage(_))
+        ));
+    }
+
+    #[test]
+    fn help_is_not_an_error() {
+        assert_eq!(args(&["--help"]), Err(NotRun::Help));
+        assert_eq!(args(&["-h"]), Err(NotRun::Help));
     }
 
     #[test]
     fn unknown_arguments_are_refused() {
-        assert!(args(&["--verbose"]).is_err());
+        assert!(matches!(args(&["--verbose"]), Err(NotRun::Usage(_))));
     }
 }

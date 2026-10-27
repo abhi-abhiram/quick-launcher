@@ -85,6 +85,10 @@ impl Test {
         only_state(self.answer(request, Answer::Items { items, more: false }))
     }
 
+    fn items_effects(&mut self, request: u64, items: Vec<Item>) -> Vec<Effect> {
+        self.answer(request, Answer::Items { items, more: false })
+    }
+
     fn input(&mut self, seq: u64, text: &str) -> State {
         only_state(self.send(Incoming::Input {
             seq,
@@ -577,10 +581,87 @@ fn leave_mode_and_complete_do_nothing_without_modes() {
 }
 
 #[test]
-fn rescanned_plugins_apply_from_the_next_open() {
-    let mut test = Test::new(vec![global("apps")]);
-    test.open();
+fn rescanned_plugins_end_the_session_and_apply_from_the_next_open() {
+    let mut test = Test::new(vec![global("apps"), global("files")]);
+    let [apps, files] = test.open()[..] else {
+        panic!()
+    };
+    test.items(apps, vec![copy("a", "A")]);
+    // `files` is removed while its request is outstanding.
+    assert_eq!(
+        test.session.handle(Event::Plugins(vec![global("apps")])),
+        [Effect::Cancel(files)]
+    );
+    // Its late answer and an activation of an old item touch nothing.
+    assert_eq!(test.items_effects(files, vec![copy("f", "F")]), []);
+    assert_eq!(
+        refs(&only_state(test.activate("apps/a", "0"))),
+        [] as [&str; 0]
+    );
+    let [apps] = test.open()[..] else { panic!() };
+    assert_eq!(refs(&test.items(apps, vec![copy("b", "B")])), ["apps/b"]);
+
     test.session
-        .set_plugins(vec![global("apps"), global("files")]);
+        .handle(Event::Plugins(vec![global("apps"), global("files")]));
     assert_eq!(test.open().len(), 2);
+}
+
+#[test]
+fn an_invalid_hello_gets_ready_then_exits() {
+    let mut test = Test::new(Vec::new());
+    let effects = test.send(Incoming::InvalidHello {
+        reason: "missing field `v`".into(),
+    });
+    assert!(matches!(
+        &effects[..],
+        [Effect::Send(Outgoing::Ready { .. }), Effect::Exit(1)]
+    ));
+}
+
+#[test]
+fn open_with_a_mode_is_the_plain_search_for_now() {
+    let mut test = Test::new(vec![global("apps"), plugin("pi", "")]);
+    let effects = test.send(Incoming::Open {
+        mode: Some("pi".into()),
+    });
+    let asked: Vec<&str> = effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::Request { plugin, .. } => Some(plugin.id()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(asked, ["apps"]);
+    assert_eq!(last_state(&effects).mode, None);
+    assert!(test.lines.get().iter().any(|line| line.contains("\"pi\"")));
+}
+
+#[test]
+fn input_in_a_mode_is_read_as_the_plain_search_for_now() {
+    let mut test = Test::new(vec![global("apps"), plugin("pi", "")]);
+    let [apps] = test.open()[..] else { panic!() };
+    test.items(apps, vec![copy("a", "Alpha"), copy("b", "Beta")]);
+    let state = only_state(test.send(Incoming::Input {
+        seq: 1,
+        mode: Some("pi".into()),
+        text: "alp".into(),
+    }));
+    assert_eq!(state.mode, None);
+    assert_eq!(refs(&state), ["apps/a"]);
+}
+
+#[test]
+fn a_refresh_clears_the_old_error_while_it_asks_again() {
+    let mut test = Test::new(vec![global("apps"), global("files")]);
+    let [apps, files] = test.open()[..] else {
+        panic!()
+    };
+    let mut item = copy("a", "A");
+    item.actions[0].after = After::Refresh;
+    test.items(apps, vec![item]);
+    test.answer(files, Answer::Failed(Failure::Plugin("broken".into())));
+    test.activate("apps/a", "0");
+    let state = last_state(&test.session.handle(Event::Ran(Ok(()))));
+    assert!(state.loading);
+    assert_eq!(state.error, None);
 }

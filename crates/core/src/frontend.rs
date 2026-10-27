@@ -42,6 +42,9 @@ pub enum Incoming {
     Activate { item: String, action: String },
     /// The session ended without running anything.
     Close,
+    /// A `hello` that couldn't be read. It still gets a `ready`, and then
+    /// the core exits, as on a version mismatch.
+    InvalidHello { reason: String },
 }
 
 /// Why a line from the frontend was not a message the core acts on.
@@ -105,15 +108,17 @@ impl Incoming {
             Envelope::deserialize(&value).map_err(|error| Unread::Invalid(error.to_string()))?;
         let invalid = |error: serde_json::Error| Unread::Invalid(format!("{kind}: {error}"));
         Ok(match kind.as_str() {
-            "hello" => {
-                let f = HelloFields::deserialize(&value).map_err(invalid)?;
-                Incoming::Hello {
+            "hello" => match HelloFields::deserialize(&value) {
+                Ok(f) => Incoming::Hello {
                     v: f.v,
                     client: f.client,
                     client_version: f.client_version,
                     max_items: f.max_items.unwrap_or(DEFAULT_MAX_ITEMS),
-                }
-            }
+                },
+                Err(error) => Incoming::InvalidHello {
+                    reason: error.to_string(),
+                },
+            },
             "open" => Incoming::Open {
                 mode: OpenFields::deserialize(&value).map_err(invalid)?.mode,
             },
@@ -331,13 +336,24 @@ mod tests {
             "not json".to_owned(),
             json!({"v":1}).to_string(),
             json!({"v":1,"type":"input","seq":"one","text":""}).to_string(),
-            json!({"type":"hello"}).to_string(),
         ] {
             assert!(
                 matches!(Incoming::parse(line.as_bytes()), Err(Unread::Invalid(_))),
                 "{line}"
             );
         }
+    }
+
+    #[test]
+    fn a_hello_without_v_is_an_invalid_hello() {
+        assert!(matches!(
+            parse(json!({"type":"hello"})),
+            Ok(Incoming::InvalidHello { .. })
+        ));
+        assert!(matches!(
+            parse(json!({"v":"one","type":"hello"})),
+            Ok(Incoming::InvalidHello { .. })
+        ));
     }
 
     #[test]

@@ -39,6 +39,8 @@ class CoreClient:
         self.mode = None
         self.text = ""
         self.state = None
+        # dev.py writes from its reader thread too (`open` after `done`).
+        self._write_lock = threading.Lock()
         self._messages = queue.Queue()
         self._reader = threading.Thread(target=self._read, daemon=True)
         self._reader.start()
@@ -50,17 +52,19 @@ class CoreClient:
         self._messages.put(None)
 
     def send(self, kind, **fields):
-        message = {"v": VERSION, "type": kind, **fields}
-        self.process.stdin.write(json.dumps(message) + "\n")
-        self.process.stdin.flush()
+        self.write({"v": VERSION, "type": kind, **fields})
+
+    def write(self, message):
+        """Sends one message as given, `v` and `type` included."""
+        with self._write_lock:
+            self.process.stdin.write(json.dumps(message) + "\n")
+            self.process.stdin.flush()
 
     def hello(self, max_items=None, v=VERSION):
         fields = {"client": "core_client.py", "client_version": "0"}
         if max_items is not None:
             fields["max_items"] = max_items
-        message = {"v": v, "type": "hello", **fields}
-        self.process.stdin.write(json.dumps(message) + "\n")
-        self.process.stdin.flush()
+        self.write({"v": v, "type": "hello", **fields})
 
     def open(self, mode=None):
         self.send("open", **({"mode": mode} if mode else {}))
