@@ -5,5 +5,10 @@ version.workspace = true
 edition.workspace = true
 repository.workspace = true
 
+[features]
+# Puts the recording platform in the binary, for the end-to-end test only.
+# Release builds never enable it.
+recording-platform = []
+
 [dependencies]
 quick-launcher-wire.workspace = true
