@@ -17,6 +17,8 @@ CHECKS = [
     ["cargo", "test"],
     # The recording platform reaches the binary only through this feature.
     ["cargo", "clippy", "-p", "quick-launcher-core", "--all-targets", "--features", "recording-platform", "--", "-D", "warnings"],
+    # The core binary over the frontend protocol, with fixture plugins.
+    [sys.executable, "tests/e2e_core.py"],
     # v0 keeps passing until the switch to v1 deletes it.
     [sys.executable, "-m", "unittest", "discover", "-s", "tests"],
     ["node", "--test", "tests/test_model.mjs"],

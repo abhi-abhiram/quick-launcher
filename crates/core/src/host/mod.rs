@@ -25,7 +25,7 @@ use crate::discovery::Plugin;
 use crate::log::Log;
 use crate::platform::Platform;
 
-mod lines;
+pub(crate) mod lines;
 
 use lines::Lines;
 

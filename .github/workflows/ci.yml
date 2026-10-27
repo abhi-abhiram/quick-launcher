@@ -26,6 +26,7 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - run: cargo clippy -p quick-launcher-core --all-targets --features recording-platform -- -D warnings
+      - run: python3 tests/e2e_core.py -v
 
   # The v0 launcher keeps working until the switch to v1 deletes it.
   v0:

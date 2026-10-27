@@ -8,7 +8,7 @@ use quick_launcher_wire::framing::{FrameError, MAX_LINE};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 
 /// Lines from `R`, each without its `\n`.
-pub(super) struct Lines<R> {
+pub(crate) struct Lines<R> {
     reader: BufReader<R>,
     buf: Vec<u8>,
     /// The line being read is over the limit; the rest of it is skipped.
@@ -16,7 +16,7 @@ pub(super) struct Lines<R> {
 }
 
 impl<R: AsyncRead + Unpin> Lines<R> {
-    pub(super) fn new(reader: R) -> Self {
+    pub(crate) fn new(reader: R) -> Self {
         Lines {
             reader: BufReader::new(reader),
             buf: Vec::new(),
@@ -30,7 +30,7 @@ impl<R: AsyncRead + Unpin> Lines<R> {
     ///
     /// Cancel safe: what was read of a line is kept for the next call, so
     /// it can be raced against other futures in `select!`.
-    pub(super) async fn next(&mut self) -> Result<Option<Vec<u8>>, FrameError> {
+    pub(crate) async fn next(&mut self) -> Result<Option<Vec<u8>>, FrameError> {
         loop {
             let available = self.reader.fill_buf().await?;
             if available.is_empty() {
