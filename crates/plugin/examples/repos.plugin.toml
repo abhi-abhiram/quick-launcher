@@ -1,0 +1,8 @@
+# The manifest of the `repos` example, from *Examples* in docs/protocol.md.
+# `tools/dev.py` lays it out with the built example as target/plugins/repos/.
+protocol = 1
+id = "repos"
+name = "Repos"
+icon = ""
+prefixes = ["repo:"]
+bin = "repos"

@@ -57,6 +57,15 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, NotRu
                 })?;
                 options.bundled_plugins = Some(PathBuf::from(dir));
             }
+            Some(arg) if arg.starts_with("--bundled-plugins=") => {
+                let dir = &arg["--bundled-plugins=".len()..];
+                if dir.is_empty() {
+                    return Err(NotRun::Usage(format!(
+                        "--bundled-plugins needs a directory\n{USAGE}"
+                    )));
+                }
+                options.bundled_plugins = Some(PathBuf::from(dir));
+            }
             Some("-h" | "--help") => return Err(NotRun::Help),
             _ => return Err(NotRun::Usage(format!("unknown argument {arg:?}\n{USAGE}"))),
         }
@@ -189,6 +198,11 @@ async fn run(platform: Box<dyn Platform + Send + Sync>, log: Log) -> u8 {
                         }
                     }
                     Effect::Run { plugin, run } => {
+                        // Runs on this thread and blocks the loop. That's
+                        // fine while every platform call only starts a
+                        // process and doesn't wait for it (`copy` also
+                        // writes its text to `wl-copy` first); a call that
+                        // waits would need `spawn_blocking`.
                         let outcome = run_action(&*platform, &run, plugin.plugin_ref())
                             .map_err(|error| error.to_string());
                         pending.push_back(Event::Ran(outcome));
@@ -237,6 +251,20 @@ mod tests {
         );
         assert!(matches!(
             args(&["--bundled-plugins"]),
+            Err(NotRun::Usage(_))
+        ));
+    }
+
+    #[test]
+    fn bundled_plugins_takes_its_directory_after_an_equals_sign() {
+        assert_eq!(
+            args(&["--bundled-plugins=target/plugins"]),
+            Ok(Options {
+                bundled_plugins: Some("target/plugins".into())
+            })
+        );
+        assert!(matches!(
+            args(&["--bundled-plugins="]),
             Err(NotRun::Usage(_))
         ));
     }

@@ -25,7 +25,7 @@ which is the one-step switch the spec asks for (*Migrating from v0*).
 | M6  | [Manifests, config and discovery](#m6--manifests-config-and-discovery) | `cargo test` | M5 |
 | M7  | [Plugin host: oneshot](#m7--plugin-host-oneshot) | `cargo test` | M3, M6 |
 | M8  | [First runnable core: plain search](#m8--first-runnable-core-plain-search) | **search and launch your apps from a terminal** | M4, M7 |
-| M9  | [Modes, prefixes and input](#m9--modes-prefixes-and-input) | entering a mode with `repos:` | M8 |
+| M9  | [Modes, prefixes and input](#m9--modes-prefixes-and-input) | entering a mode with `repo:` | M8 |
 | M10 | [The full result list](#m10--the-full-result-list) | mode hints, Tab, query items | M9 |
 | M11 | [Activation](#m11--activation) | plugin actions (pin, forget) | M10 |
 | M12 | [`pi` plugin](#m12--pi-plugin) | `pi:` mode, from the terminal | M3 |
@@ -57,7 +57,8 @@ frontend in your terminal:
 > !1                    # run item 1's default action
 ```
 
-Typing a line sends it as `input`. `!N` activates item N's default action,
+Typing a line sends it as `input`, read in the mode the prompt shows
+(`Repos> ` in a mode, `> ` in the plain search). `!N` activates item N's default action,
 `!!N` its alternate, `<` sends `leave_mode` and `\t` sends `complete`. It
 uses the real Omarchy platform, so `!1` really launches Firefox. It's a
 second frontend speaking the public protocol, which is the check the spec's
@@ -402,8 +403,9 @@ query*, *Kinds*)
   `leave_mode` after entering by prefix and by `open`; `seq` on the `state`
   answering `leave_mode`.
 - The e2e test enters and leaves a fixture mode.
-- By hand: `repos:` in `tools/dev.py` lists the `repos` example plugin's
-  repos.
+- By hand: `repo:` (the prefix in protocol.md's *Examples*) in
+  `tools/dev.py` lists the `repos` example plugin's repos. `dev.py` lays
+  the example out next to the bundled plugins.
 
 ### M10 — The full result list
 

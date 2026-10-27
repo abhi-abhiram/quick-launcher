@@ -2,15 +2,19 @@
 """Run the v1 core from a terminal, as a minimal frontend.
 
 Builds the workspace, lays out each bundled plugin as target/plugins/<id>/
+(plus the SDK's `repos` example, as protocol.md's *Examples* installs it)
 and starts the core with `--bundled-plugins target/plugins`. It uses the
 real platform, so activating an app really launches it.
 
     > fire              type a line to send it as input
      1. Firefox         Web Browser
     > !1                run item 1's default action (!!1: its alternate)
+    > repo:             a prefix enters a mode; the prompt shows it
+    Repos> <            leave the mode
 
-`<` sends leave_mode, `\\t` (or a tab) sends complete, and an empty line
-clears the text. Ctrl+D quits.
+Each line is the whole text typed in the prompt's mode. `<` sends
+leave_mode, `\\t` (or a tab) sends complete, and an empty line clears the
+text. Ctrl+D quits.
 """
 
 import argparse
@@ -22,32 +26,42 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from core_client import VERSION, CoreClient  # noqa: E402
-from plugin_layout import lay_out  # noqa: E402
+from plugin_layout import lay_out, lay_out_example  # noqa: E402
 
 try:
-    import readline  # noqa: F401  (line editing for input())
+    import readline  # line editing for input()
 except ImportError:
-    pass
+    readline = None
 
 ROOT = Path(__file__).resolve().parent.parent
-PROMPT = "> "
+EXAMPLES = ROOT / "crates" / "plugin" / "examples"
 
-# Whether the reader thread printed the prompt after a state, so the next
-# input() shouldn't print it again.
-prompted = threading.Event()
+client = None
+# Set while input() waits for a line, so a state that arrives meanwhile
+# redraws the prompt below it.
+reading = threading.Event()
+# Set when a message arrives, so the next prompt waits for the answer to the
+# last command instead of being printed above it.
+answered = threading.Event()
 
 
 def build(release):
-    argv = ["cargo", "build", "--workspace", "--bins"] + (["--release"] if release else [])
+    argv = ["cargo", "build", "--workspace", "--bins", "--examples"] + (["--release"] if release else [])
     subprocess.run(argv, cwd=ROOT, check=True)
     profile = "release" if release else "debug"
     return ROOT / "target" / profile
 
 
+def prompt():
+    """`> ` in the plain search, `<mode name>> ` in a mode."""
+    if client.mode is None:
+        return "> "
+    mode = (client.state or {}).get("mode") or {}
+    return f"{mode.get('name') if mode.get('id') == client.mode else client.mode}> "
+
+
 def show(state):
     lines = []
-    if state["mode"]:
-        lines.append(f"[{state['mode']['name']}]")
     if state["error"]:
         lines.append(f"  ! {state['error']}")
     width = max((len(item["label"]) for item in state["items"]), default=0)
@@ -62,28 +76,54 @@ def show(state):
         lines.append("  … loading")
     if not state["items"] and not state["loading"]:
         lines.append("  (no items)")
-    print("\n" + "\n".join(lines), flush=True)
-    print(PROMPT, end="", flush=True)
-    prompted.set()
+    text = "\n".join(lines)
+    if reading.is_set():
+        # input() is waiting: clear its prompt line, print the state, then
+        # draw the prompt again with what was typed so far.
+        typed = readline.get_line_buffer() if readline else ""
+        sys.stdout.write(f"\r\033[K{text}\n{prompt()}{typed}")
+        sys.stdout.flush()
+    else:
+        print(text, flush=True)
 
 
-def print_messages(client):
+def print_messages():
     while True:
         message = client.recv(timeout=None)
         if message is None:
             print("\nthe core exited", flush=True)
+            answered.set()
             return
         if message["type"] == "state":
             show(message)
         elif message["type"] == "done":
-            print("\ndone; opening a new session", flush=True)
+            print("done; opening a new session", flush=True)
             client.open()
+            continue  # the prompt waits for the new session's state
         elif message["type"] == "ready" and message["v"] != VERSION:
             print(f"\nthe core speaks frontend protocol {message['v']}, not {VERSION}", flush=True)
+            answered.set()
             return
+        answered.set()
 
 
-def item_action(client, command):
+def send(command):
+    """Sends one line typed at the prompt."""
+    if command in ("\\t", "\t"):
+        client.send("complete")
+    elif command == "<":
+        client.send("leave_mode")
+    elif command.startswith("!") and len(command) > 1:
+        target = item_action(command)
+        if not target:
+            return False
+        client.activate(*target)
+    else:
+        client.input(command)
+    return True
+
+
+def item_action(command):
     alternate = command.startswith("!!")
     number = command[2:] if alternate else command[1:]
     try:
@@ -104,28 +144,29 @@ def main():
     parser.add_argument("--release", action="store_true", help="build and run release binaries")
     args = parser.parse_args()
 
+    global client
     bins = build(args.release)
     plugins = ROOT / "target" / "plugins"
     lay_out(plugins, bins)
+    lay_out_example(plugins, EXAMPLES / "repos.plugin.toml", bins / "examples" / "repos")
     client = CoreClient([str(bins / "quick-launcher-core"), "--bundled-plugins", str(plugins)])
     client.hello()
     client.open()
-    threading.Thread(target=print_messages, args=(client,), daemon=True).start()
+    threading.Thread(target=print_messages, daemon=True).start()
 
     try:
         while True:
-            line = input("" if prompted.is_set() else PROMPT)
-            prompted.clear()
-            if line in ("\\t", "\t"):
-                client.send("complete")
-            elif line == "<":
-                client.send("leave_mode")
-            elif line.startswith("!") and len(line) > 1:
-                target = item_action(client, line)
-                if target:
-                    client.activate(*target)
-            else:
-                client.input(line)
+            # A state usually answers within milliseconds; print it before
+            # the prompt rather than through it.
+            answered.wait(timeout=1)
+            reading.set()
+            try:
+                line = input(prompt())
+            finally:
+                reading.clear()
+            answered.clear()
+            if not send(line):
+                answered.set()
     except (EOFError, KeyboardInterrupt):
         print()
     except BrokenPipeError:

@@ -70,6 +70,22 @@ def lay_out(dest, bin_dir, root=ROOT):
     return ids
 
 
+def lay_out_example(dest, manifest, binary):
+    """Add one plugin folder to `dest` for an example plugin: its manifest
+    (any file, copied as `plugin.toml`) and its built binary. Returns the
+    plugin id. `dev.py` uses it for the SDK's `repos` example; `install.py`
+    installs no examples."""
+    keys = read_manifest(manifest)
+    binary = Path(binary)
+    if not binary.is_file():
+        raise FileNotFoundError(f"{binary} is missing; build the example first")
+    folder = Path(dest) / keys["id"]
+    folder.mkdir(parents=True)
+    shutil.copy2(manifest, folder / "plugin.toml")
+    shutil.copy2(binary, folder / keys["bin"])
+    return keys["id"]
+
+
 def main():
     profile = "release" if "--release" in sys.argv[1:] else "debug"
     target = ROOT / "target"
