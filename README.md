@@ -106,7 +106,14 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-`python3 tools/check.py` runs all of the above, v0's tests included. Run it
+To try the core before the shell uses it, run `python3 tools/dev.py`. It
+builds the workspace, lays out the bundled plugins in `target/plugins/` and
+starts the core as a minimal terminal frontend: type a line to search, `!1`
+to run the first item's default action (`!!1` for its alternate). It uses
+the real platform, so `!1` on an app launches it.
+
+`python3 tools/check.py` runs all of the above, v0's tests and the core's
+end-to-end test (`tests/e2e_core.py`) included. Run it
 before pushing; the CI workflow runs the same checks on every PR and every push to `main`.
 
 Tests use temporary directories and never launch a terminal or touch your

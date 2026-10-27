@@ -2,15 +2,22 @@
 //!
 //! Compiled only for the core's own tests and under the
 //! `recording-platform` feature, so release builds never contain it.
+//! With the feature, the core binary uses it when `QL_RECORD` names a file,
+//! and writes each call there as one JSON line for the end-to-end test.
 
-use std::io;
+use std::fs::{File, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use serde::Serialize;
+
 use super::{Dirs, Platform, non_empty};
 
-/// One call a [`Recording`] received.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One call a [`Recording`] received. As a JSON line it reads
+/// `{"spawn":{"argv":[…],"cwd":"…"}}` or `{"copy":"text"}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Call {
     Spawn {
         argv: Vec<String>,
@@ -31,6 +38,7 @@ pub enum Call {
 pub struct Recording {
     dirs: Dirs,
     calls: Mutex<Vec<Call>>,
+    file: Option<Mutex<File>>,
 }
 
 impl Recording {
@@ -38,7 +46,18 @@ impl Recording {
         Recording {
             dirs,
             calls: Mutex::new(Vec::new()),
+            file: None,
         }
+    }
+
+    /// A recording that also appends each call to `path` as a JSON line,
+    /// creating the file if needed.
+    pub fn to_file(dirs: Dirs, path: &Path) -> io::Result<Recording> {
+        let file = OpenOptions::new().create(true).append(true).open(path)?;
+        Ok(Recording {
+            file: Some(Mutex::new(file)),
+            ..Recording::new(dirs)
+        })
     }
 
     /// Every call so far, oldest first.
@@ -47,6 +66,11 @@ impl Recording {
     }
 
     fn record(&self, call: Call) -> io::Result<()> {
+        if let Some(file) = &self.file {
+            let mut line = serde_json::to_vec(&call).expect("calls always encode");
+            line.push(b'\n');
+            file.lock().unwrap().write_all(&line)?;
+        }
         self.calls.lock().unwrap().push(call);
         Ok(())
     }
