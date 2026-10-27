@@ -220,6 +220,8 @@ class Shutdown(Core):
         started = time.monotonic()
         self.assertEqual(client.finish(timeout=5), 0)
         self.assertLess(time.monotonic() - started, 3)
+        if not sys.platform.startswith("linux"):
+            self.skipTest("checking that the plugin is gone reads /proc")
         deadline = time.monotonic() + 5
         while running(pid):
             self.assertLess(time.monotonic(), deadline, f"plugin process {pid} is still running")
@@ -227,7 +229,8 @@ class Shutdown(Core):
 
 
 def running(pid):
-    """Whether `pid` is a live process (not gone, and not a zombie)."""
+    """Whether `pid` is a live process (not gone, and not a zombie). Linux
+    only: it reads /proc."""
     try:
         stat = Path(f"/proc/{pid}/stat").read_text()
     except FileNotFoundError:

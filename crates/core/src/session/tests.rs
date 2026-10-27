@@ -665,3 +665,18 @@ fn a_refresh_clears_the_old_error_while_it_asks_again() {
     assert!(state.loading);
     assert_eq!(state.error, None);
 }
+
+#[test]
+fn a_refresh_after_a_failed_action_clears_its_error() {
+    let mut test = Test::new(vec![global("apps")]);
+    let [apps] = test.open()[..] else { panic!() };
+    let mut item = copy("a", "A");
+    item.actions[0].after = After::Refresh;
+    test.items(apps, vec![item]);
+    test.activate("apps/a", "0");
+    let state = only_state(test.session.handle(Event::Ran(Err("no wl-copy".into()))));
+    assert!(state.error.is_some());
+    test.activate("apps/a", "0");
+    let state = last_state(&test.session.handle(Event::Ran(Ok(()))));
+    assert_eq!(state.error, None);
+}

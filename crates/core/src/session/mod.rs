@@ -237,6 +237,7 @@ impl Session {
                     effects
                 }
                 After::Refresh => {
+                    self.action_error = None;
                     let mut effects = self.cancel_requests();
                     effects.extend(self.request_items());
                     effects.push(self.state());

@@ -32,6 +32,10 @@ except ImportError:
 ROOT = Path(__file__).resolve().parent.parent
 PROMPT = "> "
 
+# Whether the reader thread printed the prompt after a state, so the next
+# input() shouldn't print it again.
+prompted = threading.Event()
+
 
 def build(release):
     argv = ["cargo", "build", "--workspace", "--bins"] + (["--release"] if release else [])
@@ -60,6 +64,7 @@ def show(state):
         lines.append("  (no items)")
     print("\n" + "\n".join(lines), flush=True)
     print(PROMPT, end="", flush=True)
+    prompted.set()
 
 
 def print_messages(client):
@@ -109,7 +114,8 @@ def main():
 
     try:
         while True:
-            line = input(PROMPT)
+            line = input("" if prompted.is_set() else PROMPT)
+            prompted.clear()
             if line in ("\\t", "\t"):
                 client.send("complete")
             elif line == "<":
