@@ -237,6 +237,7 @@ fn rule(reason: impl Into<String>) -> ManifestError {
 mod tests {
     use super::*;
     use quick_launcher_wire::Run;
+    use std::path::Path;
 
     const MINIMAL: &str = r#"
         protocol = 1
@@ -336,11 +337,43 @@ mod tests {
     }
 
     #[test]
+    fn every_bundled_manifest_parses() {
+        let plugins = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+        let mut ids = Vec::new();
+        for entry in std::fs::read_dir(&plugins).unwrap() {
+            let folder = entry.unwrap().path();
+            let file = folder.join("plugin.toml");
+            if let Ok(text) = std::fs::read_to_string(&file) {
+                let manifest =
+                    Manifest::parse(&text).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+                assert_eq!(folder.file_name().unwrap(), manifest.id.as_str());
+                ids.push(manifest.id);
+            }
+        }
+        ids.sort();
+        assert_eq!(ids, ["apps", "pi"]);
+    }
+
+    #[test]
     fn the_bundled_apps_manifest_parses() {
         let text = include_str!("../../../../plugins/apps/plugin.toml");
         let manifest = parse(text);
         assert_eq!(manifest.id, "apps");
         assert!(manifest.global);
+    }
+
+    #[test]
+    fn the_bundled_pi_manifest_parses() {
+        let text = include_str!("../../../../plugins/pi/plugin.toml");
+        let manifest = parse(text);
+        assert_eq!(manifest.id, "pi");
+        assert_eq!(manifest.prefixes, ["pi:"]);
+        assert_eq!(manifest.bin, "pi-plugin");
+        assert_eq!(manifest.kind, Kind::List);
+        assert_eq!(manifest.lifetime, Lifetime::Oneshot);
+        assert_eq!(manifest.env, PluginEnv::Login);
+        assert!(!manifest.global);
+        assert_eq!(manifest.query_item, None);
     }
 
     #[test]

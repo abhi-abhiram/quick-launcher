@@ -1,0 +1,18 @@
+[package]
+name = "quick-launcher-pi"
+description = "The quick launcher's bundled pi plugin: pinned and recent pi projects"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "pi-plugin"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+quick-launcher-plugin.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+quick-launcher-wire.workspace = true

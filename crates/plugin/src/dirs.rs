@@ -11,9 +11,9 @@ use anyhow::{Context, anyhow};
 /// on any platform the core supports.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dirs {
-    /// Settings the user edits.
+    /// Settings and choices the user makes, such as pins.
     pub config: PathBuf,
-    /// What the plugin remembers, such as pins or history.
+    /// What the plugin remembers on its own, such as history.
     pub state: PathBuf,
 }
 
