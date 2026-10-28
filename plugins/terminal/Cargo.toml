@@ -1,0 +1,18 @@
+[package]
+name = "quick-launcher-terminal"
+description = "The quick launcher's bundled terminal plugin: run commands in a new terminal and remember them"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "terminal-plugin"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+quick-launcher-plugin.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+quick-launcher-wire.workspace = true

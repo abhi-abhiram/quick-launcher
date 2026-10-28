@@ -1,0 +1,17 @@
+protocol = 1
+id = "terminal"
+name = "Terminal"
+description = "Run a command in a new terminal"
+icon = ""
+prefixes = [">", "term:"]
+placeholder = "Run in terminal…"
+bin = "terminal-plugin"
+kind = "list"
+lifetime = "oneshot"
+
+# The typed command. "run" records it in history and has the launcher open
+# it in a terminal (see `Outcome::run`).
+[query_item]
+label = "{query}"
+detail = "Run in a new terminal"
+actions = [{ id = "run", title = "Run", run = { plugin = "run" } }]

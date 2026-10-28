@@ -38,6 +38,7 @@ def setUpModule():
         # The bundled plugins, which `BundledPlugins` lays out.
         ("quick-launcher-apps", []),
         ("quick-launcher-pi", []),
+        ("quick-launcher-terminal", []),
     ]:
         subprocess.run(
             ["cargo", "build", "--bins", "-p", package, "--target-dir", str(TARGET), *extra],
@@ -327,7 +328,7 @@ class Activation(Core):
         (self.home / "state/quick-launcher/pins/pinned").write_text("one")
         client.activate("pins/one", "pin")
         state = client.wait_for(lambda m: m["type"] == "state" and m["error"])
-        self.assertEqual(state["error"], "Couldn't run “pin”: one is already pinned")
+        self.assertEqual(state["error"], "Couldn't run “pin” for “one”: one is already pinned")
         self.assertEqual(refs(state), ["pins/one", "pins/two"])
 
     def test_a_query_item_runs_with_the_text_it_was_built_from(self):
@@ -495,6 +496,69 @@ class BundledPlugins(Core):
             self.calls(),
             [{"terminal": {"argv": ["login", "pi"], "cwd": beta}}],
         )
+
+    def terminal_state(self, client, predicate=lambda m: True):
+        return client.wait_for(
+            lambda m: m["type"] == "state" and not m["loading"]
+            and (m["mode"] or {}).get("id") == "terminal" and predicate(m)
+        )
+
+    def test_terminal_runs_typed_commands_again_and_forgets_them(self):
+        client = self.ready()
+        client.open()
+        client.settled_state()
+        client.input("> make test")
+        state = self.terminal_state(client, lambda m: m["items"])
+        self.assertEqual(refs(state), ["terminal:query:make test"])
+        self.assertEqual(state["items"][0]["detail"], "Run in a new terminal")
+
+        client.activate("terminal:query:make test", "run")
+        client.wait_for(lambda m: m["type"] == "done")
+        script = 'eval "$1"; exec "${SHELL:-bash}"'
+        run = {"terminal": {"argv": ["bash", "-ic", script, "bash", "make test"], "cwd": str(self.home)}}
+        self.assertEqual(self.calls(), [run])
+        history = self.home / "state/quick-launcher/terminal/history.json"
+        self.assertEqual(json.loads(history.read_text()), {"commands": ["make test"]})
+
+        client.open()
+        client.settled_state()
+        client.input(">")
+        state = self.terminal_state(client, lambda m: m["items"])
+        self.assertEqual([item["label"] for item in state["items"]], ["make test"])
+        self.assertEqual([a["id"] for a in state["items"][0]["actions"]], ["run", "forget"])
+
+        # Typing a remembered command shows it once, as the history item.
+        client.input("make test")
+        state = self.terminal_state(client, lambda m: m["text"] == "make test")
+        self.assertEqual(refs(state), ["terminal/make test"])
+
+        client.input("ls")
+        self.terminal_state(client, lambda m: m["text"] == "ls")
+        client.activate("terminal:query:ls", "run")
+        client.wait_for(lambda m: m["type"] == "done")
+        ls = {"terminal": {"argv": ["bash", "-ic", script, "bash", "ls"], "cwd": str(self.home)}}
+
+        # Running a history item again runs it the same way and moves it first.
+        client.open()
+        client.settled_state()
+        client.input(">")
+        state = self.terminal_state(client, lambda m: m["items"])
+        self.assertEqual([item["label"] for item in state["items"]], ["ls", "make test"])
+        client.activate("terminal/make test", "run")
+        client.wait_for(lambda m: m["type"] == "done")
+        self.assertEqual(self.calls(), [run, ls, run])
+        self.assertEqual(json.loads(history.read_text()), {"commands": ["make test", "ls"]})
+
+        client.open()
+        client.settled_state()
+        client.input(">")
+        self.terminal_state(client, lambda m: m["items"])
+        client.input("make test")
+        self.terminal_state(client, lambda m: m["text"] == "make test")
+        client.activate("terminal/make test", "forget")
+        self.terminal_state(client, lambda m: m["text"] == "make test" and refs(m) == ["terminal:query:make test"])
+        self.assertEqual(json.loads(history.read_text()), {"commands": ["ls"]})
+        self.assertEqual(self.calls(), [run, ls, run])
 
 
 class Rescan(Core):

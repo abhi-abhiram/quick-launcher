@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::one_of::exactly_one;
-use crate::{Item, PROTOCOL};
+use crate::{Item, PROTOCOL, Run};
 
 /// A request from the core: `{"v":1,"id":7,"method":"query","params":{…}}`.
 ///
@@ -194,6 +194,12 @@ pub struct ActivateResult {
     /// Replace the typed text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query: Option<String>,
+    /// Run this through the platform first, as if the action had run it,
+    /// then apply the rest. It's the same type as an action's `run`, but a
+    /// `plugin` run here is refused: the core runs nothing, drops the rest
+    /// and shows an error. The SDK can't build one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<Run>,
 }
 
 impl Default for ActivateResult {
@@ -202,6 +208,7 @@ impl Default for ActivateResult {
             close: true,
             refresh: false,
             query: None,
+            run: None,
         }
     }
 }

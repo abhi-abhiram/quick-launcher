@@ -282,6 +282,7 @@ impl Outcome {
             close: false,
             refresh: true,
             query: None,
+            run: None,
         })
     }
 
@@ -291,7 +292,17 @@ impl Outcome {
             close: false,
             refresh: false,
             query: Some(text.into()),
+            run: None,
         })
+    }
+
+    /// Also has the launcher run `run`, as if the action had, before doing
+    /// the rest: an action can change the plugin's data and start something
+    /// in one step, such as recording a command and opening it in a
+    /// terminal. If it can't run, the launcher stays open with the error.
+    pub fn run(mut self, run: Run) -> Self {
+        self.0.run = Some(run.0);
+        self
     }
 
     pub(crate) fn into_wire(self) -> wire::ActivateResult {

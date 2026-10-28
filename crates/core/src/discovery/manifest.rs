@@ -351,7 +351,7 @@ mod tests {
             }
         }
         ids.sort();
-        assert_eq!(ids, ["apps", "pi"]);
+        assert_eq!(ids, ["apps", "pi", "terminal"]);
     }
 
     #[test]
@@ -374,6 +374,24 @@ mod tests {
         assert_eq!(manifest.env, PluginEnv::Login);
         assert!(!manifest.global);
         assert_eq!(manifest.query_item, None);
+    }
+
+    #[test]
+    fn the_bundled_terminal_manifest_parses() {
+        let text = include_str!("../../../../plugins/terminal/plugin.toml");
+        let manifest = parse(text);
+        assert_eq!(manifest.id, "terminal");
+        assert_eq!(manifest.prefixes, [">", "term:"]);
+        assert_eq!(manifest.bin, "terminal-plugin");
+        assert_eq!(manifest.kind, Kind::List);
+        assert_eq!(manifest.lifetime, Lifetime::Oneshot);
+        assert_eq!(manifest.env, PluginEnv::Session);
+        assert!(!manifest.global);
+        let item = manifest.query_item.unwrap();
+        assert_eq!(item.label, "{query}");
+        assert_eq!(item.detail.as_deref(), Some("Run in a new terminal"));
+        assert_eq!(item.actions[0].id.as_deref(), Some("run"));
+        assert_eq!(item.actions[0].run, Run::Plugin("run".into()));
     }
 
     #[test]

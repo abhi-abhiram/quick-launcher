@@ -52,7 +52,7 @@ pub struct Action {
 }
 
 /// What an action does: exactly one of the six forms.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Run {
     /// Start argv detached. A relative program path (one with a `/`)
     /// resolves against the plugin folder; `cwd` defaults to the home folder.
