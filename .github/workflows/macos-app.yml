@@ -1,0 +1,26 @@
+name: macOS app binary
+
+# Temporary: builds QuickLauncher so it can be installed on a Mac whose own
+# Swift toolchain is broken. Not for merging.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift build -c release --package-path frontends/macos
+      - run: |
+          cd frontends/macos/.build/release
+          tar -czf "$RUNNER_TEMP/QuickLauncher.tar.gz" QuickLauncher
+          shasum -a 256 "$RUNNER_TEMP/QuickLauncher.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: QuickLauncher
+          path: ${{ runner.temp }}/QuickLauncher.tar.gz
+          retention-days: 1
