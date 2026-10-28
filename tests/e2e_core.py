@@ -403,6 +403,40 @@ class Shutdown(Core):
             time.sleep(0.01)
 
 
+
+class PersistentPlugin(Core):
+    def setUp(self):
+        super().setUp()
+        self.add_plugin("keep", "persistent", 'kind = "query"\nlifetime = "persistent"')
+
+    def items_for(self, client, seq):
+        state = client.wait_for(lambda m: m["type"] == "state" and m["seq"] >= seq and not m["loading"])
+        self.assertIsNone(state["error"])
+        return [(item["ref"], item["label"]) for item in state["items"]]
+
+    def test_one_process_answers_superseded_queries_are_cancelled_and_eof_stops_it(self):
+        client = self.ready()
+        client.open()
+        client.settled_state()
+        client.input("keep: a")
+        [(ref, pid)] = self.items_for(client, 1)
+        self.assertEqual(ref, "keep/a")
+
+        # `wait` answers only once cancelled, which the next input does.
+        client.input("wait")
+        client.input("b")
+        self.assertEqual(self.items_for(client, 3), [("keep/b", pid)])
+        deadline = time.monotonic() + 10
+        while "keep: cancelled while waiting" not in self.log_text():
+            self.assertLess(time.monotonic(), deadline, "the plugin never saw the cancel")
+            time.sleep(0.01)
+
+        self.assertEqual(client.finish(timeout=5), 0)
+        self.assertNotIn("stopping it", self.log_text(), "it exited once its stdin closed")
+        if sys.platform.startswith("linux"):
+            self.assertFalse(running(int(pid)), f"plugin process {pid} is still running")
+
+
 def running(pid):
     """Whether `pid` is a live process (not gone, and not a zombie). Linux
     only: it reads /proc."""

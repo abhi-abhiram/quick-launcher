@@ -12,13 +12,15 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
+use quick_launcher_wire::Request;
 use quick_launcher_wire::framing::FrameError;
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 
+use crate::discovery::{Lifetime, Plugin};
 use crate::frontend::{Incoming, Unread};
 use crate::host::lines::Lines;
-use crate::host::{Answer, Launch, oneshot};
+use crate::host::{Answer, Launch, Persistent, oneshot};
 use crate::log::Log;
 use crate::platform::{Omarchy, Platform};
 use crate::run_action;
@@ -99,8 +101,9 @@ pub fn main() -> ExitCode {
         .build()
         .expect("the runtime starts");
     let code = runtime.block_on(run(platform, log));
-    // Dropping the plugin tasks kills their processes. Reading stdin may
-    // still hold a thread, which isn't waited for.
+    // `run` has stopped the persistent plugins. Dropping the oneshot tasks
+    // still running kills their processes. Reading stdin may still hold a
+    // thread, which isn't waited for.
     runtime.shutdown_timeout(SHUTDOWN);
     ExitCode::from(code)
 }
@@ -120,13 +123,129 @@ fn platform(options: &Options) -> io::Result<Box<dyn Platform + Send + Sync>> {
     Ok(Box::new(Omarchy::with_dirs(dirs)))
 }
 
-/// The main loop. Returns the exit status.
+/// Runs the main loop, then stops every persistent plugin. Returns the exit
+/// status.
 async fn run(platform: Box<dyn Platform + Send + Sync>, log: Log) -> u8 {
-    let mut registry = Registry::new(platform.dirs().clone());
-    log_warnings(&log, registry.warnings());
+    let mut plugins = Plugins::new(platform, log.clone());
+    let code = serve(&mut plugins, &log).await;
+    plugins.shutdown().await;
+    code
+}
+
+/// The plugin processes the core is running, and its requests to them.
+struct Plugins {
+    platform: Box<dyn Platform + Send + Sync>,
+    log: Log,
+    answers: mpsc::UnboundedSender<(u64, Answer)>,
+    answered: mpsc::UnboundedReceiver<(u64, Answer)>,
+    /// One per persistent plugin used so far, by plugin id.
+    persistent: HashMap<String, Persistent>,
+    /// Each request still waiting for its final answer.
+    requests: HashMap<u64, Sent>,
+}
+
+/// Where a request went, so it can be cancelled.
+enum Sent {
+    /// To a `oneshot` plugin's process, run by this task.
+    Oneshot(AbortHandle),
+    /// To the `persistent` plugin with this id.
+    Persistent(String),
+}
+
+impl Plugins {
+    fn new(platform: Box<dyn Platform + Send + Sync>, log: Log) -> Plugins {
+        let (answers, answered) = mpsc::unbounded_channel();
+        Plugins {
+            platform,
+            log,
+            answers,
+            answered,
+            persistent: HashMap::new(),
+            requests: HashMap::new(),
+        }
+    }
+
+    /// The next answer to a request.
+    async fn answered(&mut self) -> Option<(u64, Answer)> {
+        let (request, answer) = self.answered.recv().await?;
+        if answer.is_final() {
+            self.requests.remove(&request);
+        }
+        Some((request, answer))
+    }
+
+    fn request(&mut self, plugin: &Plugin, request: Request) {
+        let id = request.id;
+        let sent = match plugin.manifest.lifetime {
+            Lifetime::Oneshot => {
+                let launch = Launch::new(&*self.platform, plugin, self.log.clone());
+                let answers = self.answers.clone();
+                let task = tokio::spawn(async move {
+                    oneshot(&launch, &request, |answer| {
+                        let _ = answers.send((id, answer));
+                    })
+                    .await;
+                });
+                Sent::Oneshot(task.abort_handle())
+            }
+            Lifetime::Persistent => {
+                let persistent = self
+                    .persistent
+                    .entry(plugin.id().to_owned())
+                    .or_insert_with(|| {
+                        let launch = Launch::new(&*self.platform, plugin, self.log.clone());
+                        let answers = self.answers.clone();
+                        Persistent::start(launch, move |id, answer| {
+                            let _ = answers.send((id, answer));
+                        })
+                    });
+                persistent.request(request);
+                Sent::Persistent(plugin.id().to_owned())
+            }
+        };
+        self.requests.insert(id, sent);
+    }
+
+    /// Stops a request: a superseded `oneshot` process is killed, and a
+    /// `persistent` plugin gets a `cancel`.
+    fn cancel(&mut self, request: u64) {
+        match self.requests.remove(&request) {
+            Some(Sent::Oneshot(task)) => task.abort(),
+            Some(Sent::Persistent(plugin)) => {
+                if let Some(persistent) = self.persistent.get(&plugin) {
+                    persistent.cancel(request);
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// A rescan changed the plugins. Persistent plugins are told to stop,
+    /// without waiting, and the next request starts them again as they are
+    /// now (a rebuilt binary, a changed manifest).
+    fn rescanned(&mut self) {
+        self.persistent.clear();
+    }
+
+    /// Closes every persistent plugin's stdin and waits briefly for them to
+    /// exit.
+    async fn shutdown(&mut self) {
+        let stopping: Vec<_> = self
+            .persistent
+            .drain()
+            .map(|(_, persistent)| persistent.shutdown())
+            .collect();
+        for stopped in stopping {
+            let _ = stopped.await;
+        }
+    }
+}
+
+/// The main loop. Returns the exit status.
+async fn serve(plugins: &mut Plugins, log: &Log) -> u8 {
+    let mut registry = Registry::new(plugins.platform.dirs().clone());
+    log_warnings(log, registry.warnings());
     let mut session = Session::new(registry.plugins().to_vec(), log.clone());
-    let (answers, mut answered) = mpsc::unbounded_channel::<(u64, Answer)>();
-    let mut requests: HashMap<u64, AbortHandle> = HashMap::new();
     let mut stdin = Lines::new(tokio::io::stdin());
 
     loop {
@@ -137,7 +256,8 @@ async fn run(platform: Box<dyn Platform + Send + Sync>, log: Log) -> u8 {
                     Ok(message) => {
                         let mut events = Vec::new();
                         if matches!(message, Incoming::Open { .. }) && registry.rescan_if_changed() {
-                            log_warnings(&log, registry.warnings());
+                            log_warnings(log, registry.warnings());
+                            plugins.rescanned();
                             events.push(Event::Plugins(registry.plugins().to_vec()));
                         }
                         events.push(Event::Frontend(message));
@@ -162,10 +282,7 @@ async fn run(platform: Box<dyn Platform + Send + Sync>, log: Log) -> u8 {
                     return 1;
                 }
             },
-            Some((request, answer)) = answered.recv() => {
-                if answer.is_final() {
-                    requests.remove(&request);
-                }
+            Some((request, answer)) = plugins.answered() => {
                 vec![Event::Answer { request, answer }]
             }
         };
@@ -180,30 +297,15 @@ async fn run(platform: Box<dyn Platform + Send + Sync>, log: Log) -> u8 {
                             return 1;
                         }
                     }
-                    Effect::Request { plugin, request } => {
-                        let launch = Launch::new(&*platform, &plugin, log.clone());
-                        let answers = answers.clone();
-                        let id = request.id;
-                        let task = tokio::spawn(async move {
-                            oneshot(&launch, &request, |answer| {
-                                let _ = answers.send((id, answer));
-                            })
-                            .await;
-                        });
-                        requests.insert(id, task.abort_handle());
-                    }
-                    Effect::Cancel(request) => {
-                        if let Some(task) = requests.remove(&request) {
-                            task.abort();
-                        }
-                    }
+                    Effect::Request { plugin, request } => plugins.request(&plugin, request),
+                    Effect::Cancel(request) => plugins.cancel(request),
                     Effect::Run { plugin, run } => {
                         // Runs on this thread and blocks the loop. That's
                         // fine while every platform call only starts a
                         // process and doesn't wait for it (`copy` also
                         // writes its text to `wl-copy` first); a call that
                         // waits would need `spawn_blocking`.
-                        let outcome = run_action(&*platform, &run, plugin.plugin_ref())
+                        let outcome = run_action(&*plugins.platform, &run, plugin.plugin_ref())
                             .map_err(|error| error.to_string());
                         pending.push_back(Event::Ran(outcome));
                     }

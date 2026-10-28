@@ -1,6 +1,7 @@
 //! Running plugin processes (*Lifetimes*, *Environment*, *Transport* and
-//! *Errors and timeouts* in `docs/protocol.md`). M7 covers `oneshot`
-//! plugins: one process per request.
+//! *Errors and timeouts* in `docs/protocol.md`): [`oneshot`] runs a
+//! `oneshot` plugin for one request, and [`Persistent`] keeps a
+//! `persistent` plugin running between requests.
 //!
 //! Nothing here knows about sessions or modes. A request goes in, and each
 //! response comes back as an [`Answer`] as soon as it arrives.
@@ -26,8 +27,10 @@ use crate::log::Log;
 use crate::platform::Platform;
 
 pub(crate) mod lines;
+mod persistent;
 
 use lines::Lines;
+pub use persistent::{MAX_RESTARTS, Persistent, RESTART_WINDOW, SHUTDOWN_GRACE};
 
 /// After a plugin exits, how long to wait for the rest of its stderr. A
 /// process it started could hold stderr open for good.
@@ -142,6 +145,9 @@ pub enum Failure {
     NoResponse(Duration),
     /// The process ended without a final answer.
     Exited(Option<ExitStatus>),
+    /// A `persistent` plugin stopped too often and isn't started again
+    /// until the core restarts.
+    GaveUp,
 }
 
 impl fmt::Display for Failure {
@@ -155,6 +161,9 @@ impl fmt::Display for Failure {
             }
             Failure::Exited(Some(status)) => write!(f, "stopped without answering ({status})"),
             Failure::Exited(None) => f.write_str("stopped without answering"),
+            Failure::GaveUp => {
+                f.write_str("kept stopping, so it's off until the launcher restarts")
+            }
         }
     }
 }
@@ -341,6 +350,18 @@ struct Raw {
     error: Option<ErrorBody>,
     #[serde(default)]
     more: bool,
+}
+
+/// The `id` and `more` of a response line, so a `persistent` plugin's
+/// response can be matched to its request before it's read in full.
+fn peek(line: &[u8]) -> Result<(u64, bool), serde_json::Error> {
+    #[derive(Deserialize)]
+    struct Peek {
+        id: u64,
+        #[serde(default)]
+        more: bool,
+    }
+    serde_json::from_slice::<Peek>(line).map(|peek| (peek.id, peek.more))
 }
 
 /// What a response line means for `request`, or `None` when it answers
