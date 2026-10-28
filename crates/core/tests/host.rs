@@ -1,5 +1,5 @@
-//! The `oneshot` plugin host against the fixture plugins in
-//! `crates/core/fixtures`, which this test builds first.
+//! The plugin host, `oneshot` and `persistent`, against the fixture plugins
+//! in `crates/core/fixtures`, which this test builds first.
 //!
 //! Each fixture is laid out as a real plugin folder in a temporary home and
 //! found by discovery, so the host runs it exactly as the core will.
@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use std::{env, fs, process};
 
 use quick_launcher_core::discovery::scan;
-use quick_launcher_core::host::{Answer, Failure, Launch, oneshot};
+use quick_launcher_core::host::{Answer, Failure, Launch, MAX_RESTARTS, Persistent, oneshot};
 use quick_launcher_core::log::Lines;
 use quick_launcher_core::platform::Omarchy;
 use quick_launcher_core::{Dirs, Log, Plugin};
@@ -454,4 +454,281 @@ async fn dropping_a_request_kills_its_plugin() {
         () = wait_for_pid => {}
     }
     fixture.assert_gone();
+}
+
+// Persistent plugins.
+
+const PERSISTENT: &str = "kind = \"query\"\nlifetime = \"persistent\"";
+
+/// A persistent plugin's task, and its answers as they arrive.
+struct Running {
+    plugin: Persistent,
+    answers: tokio::sync::mpsc::UnboundedReceiver<(u64, Answer)>,
+    log: Lines,
+}
+
+impl Running {
+    fn start(fixture: &Fixture) -> Running {
+        let (launch, log) = fixture.launch();
+        let (sender, answers) = tokio::sync::mpsc::unbounded_channel();
+        let plugin = Persistent::start(launch, move |id, answer| {
+            let _ = sender.send((id, answer));
+        });
+        Running {
+            plugin,
+            answers,
+            log,
+        }
+    }
+
+    fn query(&self, id: u64, text: &str) {
+        self.plugin.request(Request::new(id, query(text)));
+    }
+
+    /// The next answer, with the id of the request it answers.
+    async fn next(&mut self) -> (u64, Answer) {
+        tokio::time::timeout(Duration::from_secs(20), self.answers.recv())
+            .await
+            .expect("an answer within 20 s")
+            .expect("the task is running")
+    }
+
+    /// The next answer, which must be a final one to request `id` with one
+    /// item. Returns that item's id and label (the plugin's pid).
+    async fn one_item(&mut self, id: u64) -> (String, String) {
+        match self.next().await {
+            (answered, Answer::Items { items, more: false }) if answered == id => {
+                let [item] = &items[..] else {
+                    panic!("expected one item, got {items:?}")
+                };
+                (item.id.clone(), item.label.clone())
+            }
+            other => panic!("expected items for request {id}, got {other:?}"),
+        }
+    }
+
+    /// The next answer, which must be a failure of request `id`.
+    async fn failure(&mut self, id: u64) -> Failure {
+        match self.next().await {
+            (answered, Answer::Failed(failure)) if answered == id => failure,
+            other => panic!("expected request {id} to fail, got {other:?}"),
+        }
+    }
+
+    /// Waits until the log has a line containing `text`.
+    async fn wait_for_log(&self, text: &str) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !logged(&self.log.get(), text) {
+            assert!(
+                Instant::now() < deadline,
+                "{text:?} not logged: {:?}",
+                self.log.get()
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// Asserts nothing more arrives for a while.
+    async fn assert_quiet(&mut self) {
+        let more = tokio::time::timeout(Duration::from_millis(300), self.answers.recv()).await;
+        assert!(more.is_err(), "unexpected answer {more:?}");
+    }
+}
+
+impl Fixture {
+    fn has_pid(&self) -> bool {
+        self.dirs.state_for("fixture").join("pid").exists()
+    }
+}
+
+#[tokio::test]
+async fn a_persistent_plugin_starts_on_first_use_and_keeps_running() {
+    let fixture = Fixture::new("persistent", PERSISTENT);
+    let mut running = Running::start(&fixture);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!fixture.has_pid(), "started before its first request");
+
+    running.query(40, "a");
+    let (item, first) = running.one_item(40).await;
+    assert_eq!(item, "a");
+    // Ids are the caller's to choose; the process gets its own.
+    running.query(7, "b");
+    let (item, second) = running.one_item(7).await;
+    assert_eq!(item, "b");
+    assert_eq!(first, second, "both answered by one process");
+    assert_eq!(fixture.pid().to_string(), first);
+
+    running.plugin.shutdown().await.unwrap();
+    fixture.assert_gone();
+    let log = running.log.get();
+    assert!(!logged(&log, "stopping it"), "it exited by itself: {log:?}");
+}
+
+#[tokio::test]
+async fn a_newer_query_supersedes_the_older_one() {
+    let fixture = Fixture::new("persistent", PERSISTENT);
+    let mut running = Running::start(&fixture);
+    running.query(1, "wait");
+    running.plugin.cancel(1);
+    running.query(2, "b");
+    assert_eq!(running.one_item(2).await.0, "b");
+    running
+        .wait_for_log("fixture: cancelled while waiting")
+        .await;
+    running.assert_quiet().await;
+    let log = running.log.get();
+    assert!(!logged(&log, "ignoring a response"), "{log:?}");
+    running.plugin.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_persistent_plugin_streams_partial_answers() {
+    let fixture = Fixture::new("stream", PERSISTENT);
+    let mut running = Running::start(&fixture);
+    running.query(1, "3");
+    let mut shape = Vec::new();
+    loop {
+        match running.next().await {
+            (1, Answer::Items { items, more }) => {
+                shape.push((items.len(), more));
+                if !more {
+                    break;
+                }
+            }
+            other => panic!("expected items for request 1, got {other:?}"),
+        }
+    }
+    assert_eq!(shape, [(1, true), (2, true), (3, true), (4, false)]);
+    // The same process takes the next query.
+    running.query(2, "0");
+    match running.next().await {
+        (2, Answer::Items { items, more: false }) => assert_eq!(ids(&items), ["1"]),
+        other => panic!("expected the final answer to request 2, got {other:?}"),
+    }
+    running.plugin.shutdown().await.unwrap();
+    fixture.assert_gone();
+}
+
+#[tokio::test]
+async fn a_timeout_after_a_partial_answer_leaves_the_plugin_running() {
+    let fixture = Fixture::new(
+        "stream",
+        "kind = \"query\"\nlifetime = \"persistent\"\ntimeout_ms = 3000",
+    );
+    let mut running = Running::start(&fixture);
+    running.query(1, "stall");
+    match running.next().await {
+        (1, Answer::Items { items, more: true }) => assert_eq!(ids(&items), ["1"]),
+        other => panic!("expected a partial answer, got {other:?}"),
+    }
+    assert_eq!(
+        running.failure(1).await,
+        Failure::NoResponse(Duration::from_millis(3000))
+    );
+    let pid = fixture.pid().to_string();
+    let ps = Command::new("ps").args(["-p", &pid]).output().unwrap();
+    assert!(ps.status.success(), "the plugin was stopped");
+    // It never reads EOF while stalled, so shutting down kills it.
+    running.plugin.shutdown().await.unwrap();
+    fixture.assert_gone();
+    let log = running.log.get();
+    assert!(
+        logged(&log, "after being told to stop; stopping it"),
+        "{log:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_timed_out_plugin_answers_the_next_request() {
+    let fixture = Fixture::new(
+        "persistent",
+        "kind = \"query\"\nlifetime = \"persistent\"\ntimeout_ms = 1000",
+    );
+    let mut running = Running::start(&fixture);
+    running.query(1, "a");
+    let (_, pid) = running.one_item(1).await;
+    running.query(2, "sleep 1200");
+    assert_eq!(
+        running.failure(2).await,
+        Failure::NoResponse(Duration::from_millis(1000))
+    );
+    // Answered once the sleep is over, by the same process; the late
+    // answer to request 2 is dropped.
+    running.query(3, "b");
+    assert_eq!(running.one_item(3).await, ("b".to_owned(), pid));
+    running.assert_quiet().await;
+    running.plugin.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_plugin_that_exits_is_restarted_on_the_next_request() {
+    let fixture = Fixture::new("persistent", PERSISTENT);
+    let mut running = Running::start(&fixture);
+    running.query(1, "a");
+    let (_, first) = running.one_item(1).await;
+    running.query(2, "crash");
+    match running.failure(2).await {
+        Failure::Exited(Some(status)) => assert_eq!(status.code(), Some(3)),
+        other => panic!("expected an exit, got {other:?}"),
+    }
+    running.query(3, "b");
+    let (item, second) = running.one_item(3).await;
+    assert_eq!(item, "b");
+    assert_ne!(first, second, "a new process");
+    assert!(logged(&running.log.get(), "fixture: restarting it"));
+    running.plugin.shutdown().await.unwrap();
+    fixture.assert_gone();
+}
+
+#[tokio::test]
+async fn a_plugin_that_exits_too_often_stays_stopped() {
+    let fixture = Fixture::new("persistent", PERSISTENT);
+    let mut running = Running::start(&fixture);
+    // The first start and three restarts.
+    for id in 0..=MAX_RESTARTS as u64 {
+        running.query(id, "crash");
+        assert!(
+            matches!(running.failure(id).await, Failure::Exited(_)),
+            "crash {id}"
+        );
+    }
+    for id in [10, 11] {
+        running.query(id, "a");
+        assert_eq!(running.failure(id).await, Failure::GaveUp);
+    }
+    let log = running.log.get();
+    assert!(logged(&log, "won't be started again"), "{log:?}");
+    assert_eq!(
+        log.iter()
+            .filter(|line| line.contains("restarting it"))
+            .count(),
+        MAX_RESTARTS
+    );
+    running.plugin.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn shutting_down_an_unused_plugin_starts_nothing() {
+    let fixture = Fixture::new("persistent", PERSISTENT);
+    let running = Running::start(&fixture);
+    running.plugin.shutdown().await.unwrap();
+    assert!(!fixture.has_pid());
+    assert_eq!(running.log.get(), [] as [String; 0]);
+}
+
+#[tokio::test]
+async fn a_persistent_plugin_that_cant_start_doesnt_use_up_its_restarts() {
+    // Not executable.
+    let fixture = Fixture::with_bin(&|dir| fs::write(dir.join("bin"), "").unwrap(), PERSISTENT);
+    let mut running = Running::start(&fixture);
+    for id in 0..=MAX_RESTARTS as u64 + 1 {
+        running.query(id, "a");
+        let failure = running.failure(id).await;
+        assert!(matches!(failure, Failure::Start(_)), "{failure:?}");
+    }
+    let log = running.log.get();
+    assert!(logged(&log, "fixture: can't start"), "{log:?}");
+    assert!(!logged(&log, "restarting it"), "{log:?}");
+    assert!(!logged(&log, "won't be started again"), "{log:?}");
+    running.plugin.shutdown().await.unwrap();
 }
