@@ -4,7 +4,8 @@ name: macOS app binary
 # Swift toolchain is broken. Not for merging.
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [fix/macos-app-artifact]
 
 permissions:
   contents: read
