@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Run every check a PR must pass: the Rust workspace's and v0's.
+"""Run every check a PR must pass: the Rust workspace's, the core's
+end-to-end test and the installer's tests.
 
 Run it before pushing. The CI workflow runs the same commands on every
 PR and every push to main.
@@ -19,9 +20,8 @@ CHECKS = [
     ["cargo", "clippy", "-p", "quick-launcher-core", "--all-targets", "--features", "recording-platform", "--", "-D", "warnings"],
     # The core binary over the frontend protocol, with fixture plugins.
     [sys.executable, "tests/e2e_core.py"],
-    # v0 keeps passing until the switch to v1 deletes it.
+    # The installer.
     [sys.executable, "-m", "unittest", "discover", "-s", "tests"],
-    ["node", "--test", "tests/test_model.mjs"],
 ]
 
 

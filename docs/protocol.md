@@ -1,9 +1,9 @@
-# Quick launcher architecture and protocols (v1, draft)
+# Quick launcher architecture and protocols (v1)
 
-Status: **draft for review**. Nothing here is implemented yet. It replaces the
-`modes.json` contract described in the README ("v0"); the switch happens in
-one step, see [Migrating from v0](#migrating-from-v0). The implementation
-plan is in [milestones.md](milestones.md).
+Status: **implemented**. v1 replaced the `modes.json` contract of the first
+release ("v0") in one step, as [Migrating from v0](#migrating-from-v0)
+describes. How it was built is in [milestones.md](milestones.md); the open
+questions at the end are still open.
 
 The keywords MUST, SHOULD and MAY are used as in RFC 2119.
 
@@ -50,7 +50,7 @@ The keywords MUST, SHOULD and MAY are used as in RFC 2119.
 - **Frontend**: draws the list and takes input. It holds no launcher logic
   and no search of its own: it sends what was typed or chosen and draws the
   state the core sends back. The only frontend today is the Omarchy shell
-  plugin (`Launcher.qml`).
+  plugin (`frontends/omarchy/Launcher.qml`).
 - **Core**: `quick-launcher-core`, one Rust binary. It discovers plugins,
   parses prefixes, runs plugin processes, filters and ranks every item (apps
   included), and runs actions through its platform module.
@@ -166,8 +166,8 @@ core's can briefly differ. Two rules keep them consistent:
   `mode: null` the core looks for a prefix at the start of `text` and enters
   that mode, while a non-null `input.mode` takes `text` literally as that
   mode's query. So typing another mode's prefix inside a mode is search
-  text; the user leaves the mode first, as in v0 (`Launcher.qml` parses
-  prefixes only while no mode is active). Typing `pi:` then `pi:l` before
+  text; the user leaves the mode first, as in v0 (whose `Launcher.qml`
+  parsed prefixes only while no mode was active). Typing `pi:` then `pi:l` before
   any reply sends both with `mode: null`; both enter pi mode, and the second
   leaves text `l`. Typing right after `complete` or `leave_mode` works the
   same way: what the user typed is read against the screen they typed it on.
@@ -218,8 +218,11 @@ What a frontend needs to draw a row, with no knowledge of how actions run:
   A frontend SHOULD make both easy to reach; how is up to it. `key` is a
   suggested shortcut that a frontend MAY bind and MAY ignore. The Omarchy
   frontend runs the default on Enter or click, the alternate on Shift+Enter
-  or right-click, binds every `key`, and shows the selected row's other
-  actions with their keys.
+  or right-click, and shows the selected row's other actions with their
+  keys. It binds every `key` that includes Ctrl, Alt or Super, or names a
+  key it doesn't use for typing (Delete, F1–F12); its own editing and
+  navigation keys (Ctrl+N/P/J/K, the text-editing chords, Enter, Tab,
+  Escape) always win over an action's `key`.
 
 ### Mode hints
 
@@ -310,7 +313,9 @@ The core reads plugins from, in order:
 
 These are the Omarchy (Linux) paths; the core gets them from `Platform`. The
 bundled directory is per user because `install.py` builds the plugins from
-source for that user. If releases ship prebuilt binaries instead (see
+source for that user, next to the core binary
+(`$XDG_DATA_HOME/quick-launcher/bin/quick-launcher-core`, which the Omarchy
+frontend starts). If releases ship prebuilt binaries instead (see
 Distribution in [Open questions](#open-questions)), bundled plugins move to
 the install prefix, so the two decisions change together. A
 user plugin with the same `id` as a bundled one replaces it. The folder name
@@ -735,8 +740,7 @@ Everything stays in this one repository for now.
   across repositories.
 - **The frontend is the only clean cut.** It talks to the core only through
   the public frontend protocol, and after the v1 switch it is all that
-  remains of today's repository (`Launcher.qml`, `manifest.json`,
-  `install.py`).
+  remains of the v0 repository (`frontends/omarchy/` and `install.py`).
 - **Not yet, because the frontend protocol is still moving.** While it
   changes, most changes touch both sides, and `install.py` builds the core
   from source next to the QML. A separate frontend repository would first
