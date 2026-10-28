@@ -460,12 +460,12 @@ Without one, `exec` starts in the home folder and `terminal` in a folder
 the platform picks: on Omarchy, the focused terminal's folder (what
 `omarchy-cmd-terminal-cwd` prints), or home when there is none. In
 `exec`, a relative program path (the first argv entry, when it contains a
-`/`, such as `./run.sh` or `bin/tool`) resolves against the plugin folder. A bare program name is looked up on
-`PATH`, and the other arguments are passed as given. argv is never run
-through a shell; a plugin that wants shell features (the terminal plugin)
-puts the shell in its own argv. Plugins describe *what* to run, never
-*how* on a given OS, so they work unchanged on any platform the core
-supports.
+`/`, such as `./run.sh` or `bin/tool`) resolves against the plugin folder.
+A bare program name is looked up on `PATH`, and the other arguments are
+passed as given. argv is never run through a shell; a plugin that wants
+shell features (the terminal plugin) puts the shell in its own argv.
+Plugins describe *what* to run, never *how* on a given OS, so they work
+unchanged on any platform the core supports.
 
 ### Icons
 

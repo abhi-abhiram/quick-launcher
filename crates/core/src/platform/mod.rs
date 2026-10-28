@@ -49,7 +49,8 @@ pub struct Dirs {
     pub plugin_config: PathBuf,
     /// Holds each plugin's state folder, named by its id.
     pub plugin_state: PathBuf,
-    /// The user's home folder, the default `cwd` for actions.
+    /// The user's home folder: where `exec` actions run without a `cwd`, and
+    /// what a relative `cwd` resolves against.
     pub home: PathBuf,
 }
 
