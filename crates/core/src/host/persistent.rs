@@ -26,7 +26,7 @@ use tokio::time::{Instant, sleep_until, timeout};
 use super::lines::Lines;
 use super::{Answer, Failure, Launch, forward, next_stderr, peek, read_response, reap};
 
-/// How many times a plugin that exits is restarted within [`RESTART_WINDOW`].
+/// How many times a plugin that exits is restarted within a minute.
 /// After that it's never started again; every request to it fails with
 /// [`Failure::GaveUp`] until the core restarts.
 pub const MAX_RESTARTS: usize = 3;
@@ -90,7 +90,7 @@ impl Persistent {
         let _ = self.commands.send(Command::Cancel(request));
     }
 
-    /// Closes the plugin's stdin and waits up to [`SHUTDOWN_GRACE`] for it
+    /// Closes the plugin's stdin and waits up to 500 ms for it
     /// to exit, then kills it. The returned handle finishes once the
     /// process is gone. Requests still waiting get no answer.
     ///
