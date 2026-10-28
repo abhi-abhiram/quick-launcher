@@ -218,8 +218,11 @@ What a frontend needs to draw a row, with no knowledge of how actions run:
   A frontend SHOULD make both easy to reach; how is up to it. `key` is a
   suggested shortcut that a frontend MAY bind and MAY ignore. The Omarchy
   frontend runs the default on Enter or click, the alternate on Shift+Enter
-  or right-click, binds every `key`, and shows the selected row's other
-  actions with their keys.
+  or right-click, and shows the selected row's other actions with their
+  keys. It binds every `key` that includes Ctrl, Alt or Super, or names a
+  key it doesn't use for typing (Delete, F1–F12); its own editing and
+  navigation keys (Ctrl+N/P/J/K, the text-editing chords, Enter, Tab,
+  Escape) always win over an action's `key`.
 
 ### Mode hints
 

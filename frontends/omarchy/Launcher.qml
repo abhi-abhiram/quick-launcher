@@ -115,7 +115,7 @@ Item {
   function dataHome() {
     var data = Quickshell.env("XDG_DATA_HOME")
     if (data && String(data).charAt(0) === "/") return String(data)
-    return Quickshell.env("HOME") + "/.local/share"
+    return (Quickshell.env("HOME") || "") + "/.local/share"
   }
 
   function startCore() {
@@ -345,15 +345,17 @@ Item {
     var hints = []
     for (var i = 1; i < item.actions.length; i++) {
       var action = item.actions[i]
-      var key = action.key ? action.key : i === 1 ? "⇧↵" : ""
-      if (key) hints.push(key + " " + action.title)
+      var keys = []
+      if (i === 1) keys.push("⇧↵")
+      if (action.key) keys.push(action.key)
+      if (keys.length) hints.push(keys.join(" / ") + " " + action.title)
     }
     return hints.join("   ")
   }
 
   function iconSource(icon) {
     if (!icon || typeof icon !== "object") return ""
-    if (icon.path) return "file://" + icon.path
+    if (icon.path) return "file://" + String(icon.path).split("/").map(encodeURIComponent).join("/")
     if (icon.name) return Quickshell.iconPath(icon.name, true)
     return ""
   }
@@ -394,7 +396,8 @@ Item {
       anchors.horizontalCenter: parent.horizontalCenter
       width: Math.min(Style.space(560), panel.width - Style.gapsOut * 2)
       height: Math.min(contentTopInset + contentBottomInset + root.headerHeight + root.contentSpacing
-        + root.errorHeight + root.listHeight, panel.height - y - Style.gapsOut)
+        + root.errorHeight + (root.error ? root.contentSpacing : 0) + root.listHeight,
+        panel.height - y - Style.gapsOut)
       radius: root.cornerRadius
       color: root.background
       borderSpec: root.borderSpec
@@ -413,8 +416,6 @@ Item {
           if (event.key === Qt.Key_Escape) {
             if (root.text) root.setText("")
             else root.close()
-          } else if (root.activateByKey(event)) {
-            // The selected item's action with this key ran.
           } else if (Util.editsFilter(event, root.text)) {
             root.setText(Util.editedFilter(event, root.text))
           } else if (event.key === Qt.Key_Backspace && root.mode) {
@@ -431,6 +432,9 @@ Item {
             root.move(root.maxVisibleRows)
           } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             root.activate(root.selectedIndex, (event.modifiers & (Qt.ShiftModifier | Qt.ControlModifier)) !== 0 ? 1 : 0)
+          } else if (root.activateByKey(event)) {
+            // The selected item's action with this key ran. The launcher's
+            // own editing and navigation keys above always win.
           } else if (event.text && event.text.length === 1 && event.text.charCodeAt(0) >= 32
               && event.text.charCodeAt(0) !== 127
               && (event.modifiers === Qt.NoModifier || event.modifiers === Qt.ShiftModifier)) {

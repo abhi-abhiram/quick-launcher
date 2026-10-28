@@ -114,6 +114,19 @@ class InstallTest(unittest.TestCase):
             self.install()
         self.assertFalse(install.plugin_dir(self.config).exists())
         self.assertEqual(self.backups(self.shell_json), [])
+        self.assertFalse(install.core_path(self.data).exists())
+
+    def test_a_missing_plugin_binary_keeps_the_installed_core_and_plugins(self):
+        self.install()
+        installed = sorted(p.relative_to(self.data) for p in self.data.rglob("*"))
+        (self.bin / install.CORE_BIN).write_text("new core")
+        (self.bin / "pi-plugin").unlink()
+
+        with self.assertRaises(FileNotFoundError):
+            self.install()
+
+        self.assertEqual(install.core_path(self.data).read_text(), "quick-launcher-core")
+        self.assertEqual(sorted(p.relative_to(self.data) for p in self.data.rglob("*")), installed)
 
     def test_upgrading_from_v0_drops_its_files(self):
         old = install.plugin_dir(self.config)
@@ -131,11 +144,18 @@ class InstallTest(unittest.TestCase):
             bin_dir = install.build("cargo")
 
         [(command,), kwargs] = run.call_args
-        self.assertEqual(command[:4], ["cargo", "build", "--release", "--locked"])
-        self.assertEqual(command[4::2], ["--bin"] * 4)
-        self.assertEqual(command[5::2], ["quick-launcher-core", "apps", "pi-plugin", "terminal-plugin"])
+        self.assertEqual(command[:6], ["cargo", "build", "--release", "--locked", "--target-dir", str(ROOT / "target")])
+        self.assertEqual(command[6::2], ["--bin"] * 4)
+        self.assertEqual(command[7::2], ["quick-launcher-core", "apps", "pi-plugin", "terminal-plugin"])
         self.assertEqual(kwargs, {"cwd": ROOT, "check": True})
         self.assertEqual(bin_dir, ROOT / "target/release")
+
+    def test_build_uses_cargo_target_dir(self):
+        for value, expected in [("/tmp/ql-target", Path("/tmp/ql-target")), ("out", ROOT / "out"), ("", ROOT / "target")]:
+            with mock.patch.object(install.subprocess, "run") as run, mock.patch("builtins.print"):
+                bin_dir = install.build("cargo", environ={"CARGO_TARGET_DIR": value})
+            self.assertEqual(run.call_args.args[0][5], str(expected))
+            self.assertEqual(bin_dir, expected / "release")
 
     def test_install_without_cargo_says_how_to_get_it(self):
         with mock.patch.object(install.shutil, "which", return_value=None):

@@ -84,39 +84,48 @@ def check_cargo() -> str:
     return cargo
 
 
-def build(cargo: str, source: Path = ROOT) -> Path:
+def target_dir(source: Path = ROOT, environ=os.environ) -> Path:
+    """Cargo's target folder: $CARGO_TARGET_DIR (relative to `source`) when
+    set, `source/target` otherwise. `build` passes it to cargo explicitly,
+    so the binaries are where this says."""
+    return source / (environ.get("CARGO_TARGET_DIR") or "target")
+
+
+def build(cargo: str, source: Path = ROOT, environ=os.environ) -> Path:
     """Build the core and every bundled plugin's binary in release mode.
     Returns the folder holding the binaries."""
     bins = [CORE_BIN] + [manifest["bin"] for _, manifest in plugin_layout.bundled_plugins(source)]
-    command = [cargo, "build", "--release", "--locked"]
+    target = target_dir(source, environ)
+    command = [cargo, "build", "--release", "--locked", "--target-dir", str(target)]
     for name in bins:
         command += ["--bin", name]
     print(f"Building: {' '.join(command[1:])}", flush=True)
     subprocess.run(command, cwd=source, check=True)
-    return source / "target/release"
+    return target / "release"
 
 
 def install_core(data_home: Path, bin_dir: Path, source: Path = ROOT) -> None:
     """Copy the core binary and lay out the bundled plugins, each swapped in
-    whole so a running core never starts a half-copied file."""
+    whole so a running core never starts a half-copied file.
+
+    Both are staged before either is swapped in, so a missing binary leaves
+    the installed core and plugins as they were rather than mixing versions.
+    """
     binary = Path(bin_dir) / CORE_BIN
     if not binary.is_file():
         raise FileNotFoundError(f"{binary} is missing; the build didn't produce it")
     target = core_path(data_home)
     target.parent.mkdir(parents=True, exist_ok=True)
+    plugins = bundled_plugins_dir(data_home)
+    staged = Path(tempfile.mkdtemp(dir=plugins.parent, prefix=".plugins-"))
     fd, temporary = tempfile.mkstemp(dir=target.parent, prefix=f".{CORE_BIN}-")
     os.close(fd)
     try:
+        plugin_layout.lay_out(staged / "plugins", bin_dir, source)
         shutil.copy2(binary, temporary)
         os.chmod(temporary, 0o755)
-        os.replace(temporary, target)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
 
-    plugins = bundled_plugins_dir(data_home)
-    staged = Path(tempfile.mkdtemp(dir=plugins.parent, prefix=".plugins-"))
-    try:
-        plugin_layout.lay_out(staged / "plugins", bin_dir, source)
+        os.replace(temporary, target)
         if plugins.exists():
             retired = plugins.with_name(f".plugins-old-{stamp()}")
             plugins.rename(retired)
@@ -125,6 +134,7 @@ def install_core(data_home: Path, bin_dir: Path, source: Path = ROOT) -> None:
         else:
             (staged / "plugins").rename(plugins)
     finally:
+        Path(temporary).unlink(missing_ok=True)
         shutil.rmtree(staged, ignore_errors=True)
 
 
@@ -283,7 +293,8 @@ def main():
         "--data-home", type=Path,
         default=Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share"),
         help="Data directory for the core and bundled plugins (default: $XDG_DATA_HOME or "
-             "~/.local/share). The launcher looks for the core there, so change it only for testing.",
+             "~/.local/share). The launcher always starts the core from $XDG_DATA_HOME, "
+             "so set this only to try the installer.",
     )
     parser.add_argument("--uninstall", action="store_true", help="Remove the launcher")
     parser.add_argument("--no-reload", action="store_true",
