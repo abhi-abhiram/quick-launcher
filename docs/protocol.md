@@ -455,10 +455,12 @@ user triggers them is up to the frontend (see
 | `{"copy": "text"}` | Put text on the clipboard. |
 | `{"plugin": "<action id>"}` | Send `activate` to the plugin and apply its `result`, which can name another form to run. |
 
-`cwd` is optional and defaults to the home folder; a relative `cwd`
-resolves against the home folder. In `exec`, a relative program path (the
-first argv entry, when it contains a `/`, such as `./run.sh` or `bin/tool`)
-resolves against the plugin folder. A bare program name is looked up on
+`cwd` is optional; a relative `cwd` resolves against the home folder.
+Without one, `exec` starts in the home folder and `terminal` in a folder
+the platform picks: on Omarchy, the focused terminal's folder (what
+`omarchy-cmd-terminal-cwd` prints), or home when there is none. In
+`exec`, a relative program path (the first argv entry, when it contains a
+`/`, such as `./run.sh` or `bin/tool`) resolves against the plugin folder. A bare program name is looked up on
 `PATH`, and the other arguments are passed as given. argv is never run
 through a shell; a plugin that wants shell features (the terminal plugin)
 puts the shell in its own argv. Plugins describe *what* to run, never
@@ -654,7 +656,8 @@ implementation today is `Omarchy`:
 pub trait Platform {
     /// Start argv detached from the core.
     fn spawn(&self, argv: &[String], cwd: Option<&Path>) -> io::Result<()>;
-    /// Start argv in the user's terminal.
+    /// Start argv in the user's terminal. With no `cwd`, the platform
+    /// picks the folder: Omarchy uses the focused terminal's, or home.
     fn terminal(&self, argv: &[String], cwd: Option<&Path>) -> io::Result<()>;
     /// Launch an installed app by its platform id.
     fn launch_app(&self, id: &str) -> io::Result<()>;
@@ -673,7 +676,7 @@ pub trait Platform {
 | method          | Omarchy |
 |-----------------|---------|
 | `spawn`         | `setsid uwsm-app -- <argv>` |
-| `terminal`      | `setsid uwsm-app -- xdg-terminal-exec --dir=<cwd> <argv>` |
+| `terminal`      | `setsid uwsm-app -- xdg-terminal-exec --dir=<cwd> <argv>`; with no `cwd`, the folder `omarchy-cmd-terminal-cwd` prints, or home |
 | `launch_app`    | `setsid uwsm-app -- <id>` |
 | `open`          | `xdg-open` |
 | `copy`          | `wl-copy` |

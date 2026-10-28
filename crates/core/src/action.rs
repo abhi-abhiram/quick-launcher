@@ -29,7 +29,9 @@ pub struct PluginRef<'a> {
 
 /// Runs every form but `plugin` through `platform`.
 ///
-/// `cwd` defaults to home, and a relative one resolves against home. In
+/// `cwd` defaults to home, and a relative one resolves against home. A
+/// `terminal` with no `cwd` passes none, so the platform picks the folder
+/// (the focused terminal's on Omarchy, falling back to home). In
 /// `exec`, a relative program path (one with a `/`, such as `./run` or
 /// `bin/tool`) resolves against the plugin folder; a bare name is looked up
 /// on `PATH`. For `login` plugins, `exec` and `terminal` go through
@@ -55,7 +57,8 @@ pub fn run_action(
         }
         Run::Terminal { argv, cwd } => {
             let argv = wrap(platform, plugin, non_empty(argv)?.to_vec());
-            platform.terminal(&argv, Some(&cwd_or_home(cwd.as_deref(), home)))
+            let cwd = cwd.as_deref().map(|cwd| home.join(cwd));
+            platform.terminal(&argv, cwd.as_deref())
         }
         Run::App(id) => platform.launch_app(id),
         Run::Open(target) => platform.open(target),
@@ -160,16 +163,27 @@ mod tests {
     }
 
     #[test]
-    fn cwd_defaults_to_home() {
+    fn exec_cwd_defaults_to_home() {
         assert_eq!(
             calls(exec(&["htop"], None), PluginEnv::Session),
             [spawned(&["htop"], HOME)]
         );
+    }
+
+    #[test]
+    fn a_terminal_without_cwd_leaves_the_folder_to_the_platform() {
         assert_eq!(
             calls(terminal(&["htop"], None), PluginEnv::Session),
             [Call::Terminal {
                 argv: argv(&["htop"]),
-                cwd: Some(HOME.into())
+                cwd: None
+            }]
+        );
+        assert_eq!(
+            calls(terminal(&["htop"], Some("Projects/x")), PluginEnv::Session),
+            [Call::Terminal {
+                argv: argv(&["htop"]),
+                cwd: Some("/home/me/Projects/x".into())
             }]
         );
     }

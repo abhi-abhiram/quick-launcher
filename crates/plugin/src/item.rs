@@ -213,8 +213,10 @@ impl Run {
     }
 
     /// The working directory for [`exec`](Run::exec) and
-    /// [`terminal`](Run::terminal); the home folder when not given. Other
-    /// forms run no command, so they ignore it.
+    /// [`terminal`](Run::terminal). When not given, `exec` runs in the home
+    /// folder and `terminal` in the platform's choice (the focused
+    /// terminal's folder on Omarchy, or home). Other forms run no command,
+    /// so they ignore it.
     pub fn cwd(mut self, dir: impl AsRef<Path>) -> Self {
         if let wire::Run::Exec { cwd, .. } | wire::Run::Terminal { cwd, .. } = &mut self.0 {
             *cwd = Some(dir.as_ref().to_string_lossy().into_owned());

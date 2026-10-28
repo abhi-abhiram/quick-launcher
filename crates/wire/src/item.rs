@@ -60,7 +60,8 @@ pub enum Run {
         argv: Vec<String>,
         cwd: Option<String>,
     },
-    /// Start argv in the user's terminal; `cwd` defaults to the home folder.
+    /// Start argv in the user's terminal. Without `cwd`, the platform picks
+    /// the folder (the focused terminal's on Omarchy, or home).
     Terminal {
         argv: Vec<String>,
         cwd: Option<String>,

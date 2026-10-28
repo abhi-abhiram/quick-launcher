@@ -19,7 +19,8 @@ pub use recording::{Call, Recording};
 pub trait Platform {
     /// Start argv detached from the core.
     fn spawn(&self, argv: &[String], cwd: Option<&Path>) -> io::Result<()>;
-    /// Start argv in the user's terminal.
+    /// Start argv in the user's terminal. With no `cwd`, the platform
+    /// picks the folder: Omarchy uses the focused terminal's, or home.
     fn terminal(&self, argv: &[String], cwd: Option<&Path>) -> io::Result<()>;
     /// Launch an installed app by its platform id.
     fn launch_app(&self, id: &str) -> io::Result<()>;

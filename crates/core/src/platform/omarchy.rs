@@ -7,6 +7,7 @@ use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 use std::{env, thread};
 
 use super::{Dirs, Platform, non_empty};
@@ -44,8 +45,12 @@ impl Platform for Omarchy {
     }
 
     fn terminal(&self, argv: &[String], cwd: Option<&Path>) -> io::Result<()> {
-        let cwd = self.cwd(cwd);
-        detach(terminal_argv(non_empty(argv)?, cwd), cwd)
+        let argv = non_empty(argv)?;
+        let cwd = match cwd {
+            Some(cwd) => cwd.to_path_buf(),
+            None => terminal_cwd(focused_terminal_cwd().as_deref(), &self.dirs.home),
+        };
+        detach(terminal_argv(argv, &cwd), &cwd)
     }
 
     fn launch_app(&self, id: &str) -> io::Result<()> {
@@ -92,6 +97,47 @@ pub(crate) fn terminal_argv(argv: &[String], cwd: &Path) -> Vec<String> {
         .chain([format!("--dir={}", cwd.display())])
         .chain(argv.iter().cloned())
         .collect()
+}
+
+/// How long `omarchy-cmd-terminal-cwd` gets before the terminal opens in
+/// home instead.
+const TERMINAL_CWD_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// What `omarchy-cmd-terminal-cwd` prints: the folder of the focused
+/// terminal's shell, as Omarchy's own new-terminal binding uses. `None`
+/// when it can't run, fails or takes too long.
+fn focused_terminal_cwd() -> Option<String> {
+    let mut child = Command::new("omarchy-cmd-terminal-cwd")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + TERMINAL_CWD_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => break,
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            _ => {
+                let _ = child.kill();
+                reap(child);
+                return None;
+            }
+        }
+    }
+    let mut output = String::new();
+    io::Read::read_to_string(&mut child.stdout.take()?, &mut output).ok()?;
+    Some(output)
+}
+
+/// The folder a terminal opens in when its action names none: what
+/// `omarchy-cmd-terminal-cwd` printed when that's an existing absolute
+/// folder, home otherwise. This is v0's rule.
+pub(crate) fn terminal_cwd(printed: Option<&str>, home: &Path) -> PathBuf {
+    printed
+        .map(|printed| Path::new(printed.trim_end_matches('\n')))
+        .filter(|path| path.is_absolute() && path.is_dir())
+        .map_or_else(|| home.to_path_buf(), Path::to_path_buf)
 }
 
 /// `setsid uwsm-app -- <id>`, which uwsm-app reads as a desktop entry id.
@@ -205,6 +251,29 @@ mod tests {
                 "pi"
             ])
         );
+    }
+
+    #[test]
+    fn a_terminal_without_cwd_opens_in_the_focused_terminals_folder() {
+        let home = Path::new("/home/me");
+        let focused = env::temp_dir();
+        let printed = format!("{}\n", focused.display());
+        assert_eq!(terminal_cwd(Some(&printed), home), focused);
+    }
+
+    #[test]
+    fn a_terminal_falls_back_to_home_when_there_is_no_usable_folder() {
+        let home = Path::new("/home/me");
+        let missing = env::temp_dir().join("quick-launcher-no-such-folder");
+        for printed in [
+            None,
+            Some(""),
+            Some("\n"),
+            Some("relative/folder\n"),
+            Some(missing.to_str().unwrap()),
+        ] {
+            assert_eq!(terminal_cwd(printed, home), home, "{printed:?}");
+        }
     }
 
     #[test]
