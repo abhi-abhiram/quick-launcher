@@ -139,6 +139,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "quick-launcher-projects"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "quick-launcher-plugin",
+ "quick-launcher-wire",
+ "serde_json",
+]
+
+[[package]]
 name = "quick-launcher-terminal"
 version = "0.1.0"
 dependencies = [

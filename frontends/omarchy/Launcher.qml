@@ -257,8 +257,9 @@ Item {
     root.send({ type: "leave_mode" })
   }
 
-  // Tab: the selected row's mode when it's a mode hint, or the first hint's.
-  // The core decides which rows are hints.
+  // Tab: the selected row's mode when it's a mode hint, or the first hint's;
+  // in a mode, the selected row's completion, or the first row's. The core
+  // decides which rows are hints and completions, and sends the new text.
   function complete() {
     var selected = root.items[root.selectedIndex]
     root.resetSelection = true

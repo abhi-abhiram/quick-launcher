@@ -55,6 +55,7 @@ fn item_example() {
             keywords: vec!["launcher".into()],
             disabled: false,
             score: None,
+            complete: None,
             actions: vec![
                 Action {
                     id: Some("open".into()),

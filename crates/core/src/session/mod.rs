@@ -9,8 +9,9 @@
 //! So far it covers the plain search over every global list plugin and the
 //! mode hints, modes (entered by prefix, by `open`, by the frontend's
 //! `input.mode`, by `complete` or by a hint) for list and query plugins,
-//! `[query_item]`s, and activating actions, whether they run through the
-//! platform or are `plugin` actions the plugin answers.
+//! `[query_item]`s, completing an item's text with Tab, and activating
+//! actions, whether they run through the platform or are `plugin` actions
+//! the plugin answers.
 
 use std::cmp::Ordering;
 
@@ -572,39 +573,59 @@ impl Session {
         )
     }
 
-    /// Enters the mode of the hint `item` names, or else, in the plain
+    /// Tab. Enters the mode of the hint `item` names, or else, in the plain
     /// search, the first hint's. A hint's ref is honoured even when the
     /// core has since entered a mode: the user chose it on the screen they
-    /// saw (*Reading input as the user saw it*).
+    /// saw (*Reading input as the user saw it*). In a mode, replaces the
+    /// text with the `complete` of the item `item` names, or else of the
+    /// first shown item that has one.
     fn complete(&mut self, item: Option<&str>) -> Vec<Effect> {
         let selected = match item.and_then(Ref::parse) {
             Some(Ref::Hint { plugin }) => self.plugin_index(plugin),
             _ => None,
         };
-        let first = || {
-            if self.mode.is_some() {
-                return None;
+        if let Some(plugin) = selected {
+            return self.enter_mode(plugin);
+        }
+        if let Some(active) = self.mode.clone() {
+            let chosen = match item.and_then(|item| self.resolve(item)) {
+                Some(Target::Item { item, .. }) => item.complete,
+                _ => None,
+            };
+            let first = || {
+                self.visible(&self.shown())
+                    .into_iter()
+                    .find_map(|row| match row {
+                        Row::Item(source, index) => {
+                            self.sources[source].items[index].complete.clone()
+                        }
+                        _ => None,
+                    })
+            };
+            if let Some(text) = chosen.or_else(first) {
+                self.action_error = None;
+                return self.switch(Some(active), text);
             }
-            self.visible(&self.shown())
+        } else {
+            let first = self
+                .visible(&self.shown())
                 .into_iter()
                 .find_map(|row| match row {
                     Row::Hint(plugin) => Some(plugin),
                     _ => None,
-                })
-        };
-        match selected.or_else(first) {
-            Some(plugin) => self.enter_mode(plugin),
-            None => {
-                let named = match item {
-                    Some(item) => format!("{item:?} names no mode hint"),
-                    None => "no item is selected".to_owned(),
-                };
-                self.log.write(format_args!(
-                    "nothing to complete: {named}, and the state shows no hint"
-                ));
-                Vec::new()
+                });
+            if let Some(plugin) = first {
+                return self.enter_mode(plugin);
             }
         }
+        let named = match item {
+            Some(item) => format!("{item:?} names no mode hint or completion"),
+            None => "no item is selected".to_owned(),
+        };
+        self.log.write(format_args!(
+            "nothing to complete: {named}, and the state shows no hint or completion"
+        ));
+        Vec::new()
     }
 
     /// Leaves the active mode, putting back the prefix that entered it (or
@@ -1266,6 +1287,7 @@ fn filled_query_item(query_item: &QueryItem, query: &str) -> Item {
         keywords: Vec::new(),
         disabled: false,
         score: None,
+        complete: None,
         actions: query_item
             .actions
             .iter()
