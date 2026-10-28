@@ -1,4 +1,4 @@
-//! The matcher, against v0's cases in `tests/test_model.mjs` (`textScore`,
+//! The matcher, against v0's cases from its `tests/test_model.mjs` (`textScore`,
 //! `rowScore`, `filterRows`, `modeHints`, `namesMode`) plus the keyword tier
 //! v1 adds.
 

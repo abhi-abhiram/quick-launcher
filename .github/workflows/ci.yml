@@ -28,10 +28,8 @@ jobs:
       - run: cargo clippy -p quick-launcher-core --all-targets --features recording-platform -- -D warnings
       - run: python3 tests/e2e_core.py -v
 
-  # The v0 launcher keeps working until the switch to v1 deletes it.
-  v0:
+  install:
     runs-on: tenki-standard-small-2c-4g
     steps:
       - uses: actions/checkout@v4
       - run: python3 -m unittest discover -s tests -v
-      - run: node --test tests/test_model.mjs

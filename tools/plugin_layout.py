@@ -5,8 +5,8 @@ Each folder in `plugins/` holds a `plugin.toml` and a Cargo package whose
 binary is the manifest's `bin`. A plugin folder is `<dest>/<id>/` with the
 manifest and that binary, built beforehand by `cargo build`.
 
-`tools/dev.py` uses this for `target/plugins/`; `install.py` will use it
-for the installed plugins.
+`tools/dev.py` uses this for `target/plugins/`, and `install.py` for the
+installed plugins.
 """
 
 import re

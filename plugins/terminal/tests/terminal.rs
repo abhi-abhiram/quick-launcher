@@ -1,4 +1,4 @@
-//! The plugin over temporary folders: `tests/test_terminal_mode.py`'s
+//! The plugin over temporary folders: v0's `tests/test_terminal_mode.py`
 //! cases, the history migration, and the built binary answering requests.
 
 use std::fs;

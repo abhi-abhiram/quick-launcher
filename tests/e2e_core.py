@@ -8,8 +8,8 @@ uses. Plugins live in temporary XDG directories and every platform call is
 written to a file instead of run, so nothing launches and no Omarchy,
 Hyprland or Quickshell is needed.
 
-Run it with `python3 tests/e2e_core.py`. It isn't named test_*.py, so v0's
-`unittest discover` doesn't pick it up without a Rust toolchain.
+Run it with `python3 tests/e2e_core.py`. It isn't named test_*.py, so the
+installer's `unittest discover` doesn't pick it up without a Rust toolchain.
 """
 
 import json

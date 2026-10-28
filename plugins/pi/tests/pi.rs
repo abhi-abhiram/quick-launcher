@@ -1,4 +1,4 @@
-//! The plugin over temporary folders: `tests/test_pi_mode.py`'s cases, the
+//! The plugin over temporary folders: v0's `tests/test_pi_mode.py` cases, the
 //! pins migration, and the built binary answering a `list` request.
 
 use std::fs;

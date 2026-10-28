@@ -555,10 +555,12 @@ Branch `feat/omarchy-v1`. One PR, as the spec requires.
   and reports a major version mismatch as a notification.
 - Delete the QML app search and the `AppLibrary` workaround, `modes.json`,
   `modes/*.py`, `LauncherModel.js` and their tests.
-- `install.py`: checks for `cargo`, builds the workspace in release mode,
-  installs the core binary and the bundled plugins to
-  `$XDG_DATA_HOME/quick-launcher/plugins/<id>/` (importing
-  `tools/plugin_layout.py`), then the shell plugin as today. `--uninstall` removes both.
+- `install.py`: checks for `cargo`, builds the core and the bundled
+  plugins in release mode, installs the core binary to
+  `$XDG_DATA_HOME/quick-launcher/bin/` (where `Launcher.qml` starts it) and
+  the bundled plugins to `$XDG_DATA_HOME/quick-launcher/plugins/<id>/`
+  (importing `tools/plugin_layout.py`), then the shell plugin as today.
+  `--uninstall` removes both.
 - README: new install requirements, writing a plugin (pointing at the SDK
   and the `repos` example), updated data paths and development commands.
   protocol.md's status changes from draft to implemented.
