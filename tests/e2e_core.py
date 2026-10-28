@@ -568,7 +568,8 @@ class BundledPlugins(Core):
         client.activate("terminal:query:make test", "run")
         client.wait_for(lambda m: m["type"] == "done")
         script = 'eval "$1"; exec "${SHELL:-bash}"'
-        run = {"terminal": {"argv": ["bash", "-ic", script, "bash", "make test"], "cwd": str(self.home)}}
+        # No cwd: the platform opens it in the focused terminal's folder.
+        run = {"terminal": {"argv": ["bash", "-ic", script, "bash", "make test"], "cwd": None}}
         self.assertEqual(self.calls(), [run])
         history = self.home / "state/quick-launcher/terminal/history.json"
         self.assertEqual(json.loads(history.read_text()), {"commands": ["make test"]})
@@ -589,7 +590,7 @@ class BundledPlugins(Core):
         self.terminal_state(client, lambda m: m["text"] == "ls")
         client.activate("terminal:query:ls", "run")
         client.wait_for(lambda m: m["type"] == "done")
-        ls = {"terminal": {"argv": ["bash", "-ic", script, "bash", "ls"], "cwd": str(self.home)}}
+        ls = {"terminal": {"argv": ["bash", "-ic", script, "bash", "ls"], "cwd": None}}
 
         # Running a history item again runs it the same way and moves it first.
         client.open()

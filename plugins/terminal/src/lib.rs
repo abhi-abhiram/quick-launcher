@@ -162,8 +162,9 @@ pub fn forget(env: &Env, command: &str) -> anyhow::Result<()> {
     write_history(env, &commands)
 }
 
-/// Opens `command` in a new terminal, through [`SCRIPT`]. Its folder is
-/// the launcher's default, the home folder.
+/// Opens `command` in a new terminal, through [`SCRIPT`]. It names no
+/// folder, so it opens where the platform chooses: the focused terminal's
+/// folder on Omarchy, as in v0.
 pub fn terminal_run(command: &str) -> Run {
     Run::terminal(["bash", "-ic", SCRIPT, "bash", command])
 }

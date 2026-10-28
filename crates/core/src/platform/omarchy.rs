@@ -7,6 +7,7 @@ use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 use std::{env, thread};
 
 use super::{Dirs, Platform, non_empty};
@@ -44,8 +45,15 @@ impl Platform for Omarchy {
     }
 
     fn terminal(&self, argv: &[String], cwd: Option<&Path>) -> io::Result<()> {
-        let cwd = self.cwd(cwd);
-        detach(terminal_argv(non_empty(argv)?, cwd), cwd)
+        let argv = non_empty(argv)?;
+        let cwd = match cwd {
+            Some(cwd) => cwd.to_path_buf(),
+            None => {
+                let printed = printed_by(TERMINAL_CWD_COMMAND, TERMINAL_CWD_TIMEOUT);
+                terminal_cwd(printed.as_deref(), &self.dirs.home)
+            }
+        };
+        detach(terminal_argv(argv, &cwd), &cwd)
     }
 
     fn launch_app(&self, id: &str) -> io::Result<()> {
@@ -92,6 +100,54 @@ pub(crate) fn terminal_argv(argv: &[String], cwd: &Path) -> Vec<String> {
         .chain([format!("--dir={}", cwd.display())])
         .chain(argv.iter().cloned())
         .collect()
+}
+
+/// Prints the folder of the focused terminal's shell, as Omarchy's own
+/// new-terminal binding uses.
+const TERMINAL_CWD_COMMAND: &str = "omarchy-cmd-terminal-cwd";
+
+/// How long [`TERMINAL_CWD_COMMAND`] gets before the terminal opens in home
+/// instead. Same as v0.
+const TERMINAL_CWD_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// What `program` prints, or `None` when it can't run, fails, takes longer
+/// than `timeout` or prints something that isn't UTF-8.
+///
+/// This blocks the caller, which for a `terminal` action is the core's
+/// session loop: the launcher stays on screen until it returns. Keep the
+/// timeout short, and don't call it anywhere that blocks more than that.
+fn printed_by(program: &str, timeout: Duration) -> Option<String> {
+    let mut child = Command::new(program)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => break,
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            _ => {
+                let _ = child.kill();
+                reap(child);
+                return None;
+            }
+        }
+    }
+    let mut output = String::new();
+    io::Read::read_to_string(&mut child.stdout.take()?, &mut output).ok()?;
+    Some(output)
+}
+
+/// The folder a terminal opens in when its action names none: what
+/// [`TERMINAL_CWD_COMMAND`] printed, without trailing whitespace, when
+/// that's an existing absolute folder, home otherwise. This is v0's rule.
+pub(crate) fn terminal_cwd(printed: Option<&str>, home: &Path) -> PathBuf {
+    printed
+        .map(|printed| Path::new(printed.trim_end()))
+        .filter(|path| path.is_absolute() && path.is_dir())
+        .map_or_else(|| home.to_path_buf(), Path::to_path_buf)
 }
 
 /// `setsid uwsm-app -- <id>`, which uwsm-app reads as a desktop entry id.
@@ -205,6 +261,85 @@ mod tests {
                 "pi"
             ])
         );
+    }
+
+    #[test]
+    fn a_terminal_without_cwd_opens_in_the_focused_terminals_folder() {
+        let home = Path::new("/home/me");
+        let focused = env::temp_dir();
+        let printed = format!("{}\n", focused.display());
+        assert_eq!(terminal_cwd(Some(&printed), home), focused);
+    }
+
+    #[test]
+    fn a_terminal_falls_back_to_home_when_there_is_no_usable_folder() {
+        let home = Path::new("/home/me");
+        let missing = env::temp_dir().join("quick-launcher-no-such-folder");
+        for printed in [
+            None,
+            Some(""),
+            Some("\n"),
+            Some("relative/folder\n"),
+            Some(missing.to_str().unwrap()),
+        ] {
+            assert_eq!(terminal_cwd(printed, home), home, "{printed:?}");
+        }
+    }
+
+    #[test]
+    fn trailing_whitespace_is_dropped_as_in_v0() {
+        let focused = env::temp_dir();
+        let printed = format!("{} \r\n", focused.display());
+        assert_eq!(terminal_cwd(Some(&printed), Path::new("/home/me")), focused);
+    }
+
+    /// A script in a fresh temporary folder that runs `body` with `sh`.
+    fn script(name: &str, body: &str) -> (PathBuf, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = env::temp_dir().join(format!(
+            "quick-launcher-omarchy-{name}-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn printed_by_returns_what_the_program_prints() {
+        let (dir, path) = script("prints", "echo /some/folder");
+        let printed = printed_by(path.to_str().unwrap(), Duration::from_secs(5));
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(printed.as_deref(), Some("/some/folder\n"));
+    }
+
+    #[test]
+    fn printed_by_is_none_for_a_failure_bad_output_or_no_program() {
+        let (dir, fails) = script("fails", "echo /some/folder; exit 1");
+        let (dir2, binary) = script("binary", r"printf '\377\n'");
+        let failed = printed_by(fails.to_str().unwrap(), Duration::from_secs(5));
+        let not_utf8 = printed_by(binary.to_str().unwrap(), Duration::from_secs(5));
+        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(dir2).unwrap();
+        assert_eq!(failed, None);
+        assert_eq!(not_utf8, None);
+        assert_eq!(
+            printed_by("quick-launcher-no-such-program", Duration::from_secs(5)),
+            None
+        );
+    }
+
+    #[test]
+    fn printed_by_gives_up_after_the_timeout() {
+        let (dir, path) = script("hangs", "sleep 10; echo /some/folder");
+        let started = Instant::now();
+        let printed = printed_by(path.to_str().unwrap(), Duration::from_millis(200));
+        let waited = started.elapsed();
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(printed, None);
+        assert!(waited < Duration::from_secs(5), "waited {waited:?}");
     }
 
     #[test]

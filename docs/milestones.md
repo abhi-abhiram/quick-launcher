@@ -505,11 +505,10 @@ v0*)
   applying the rest (`Outcome::run` in the SDK). Without it, an action
   could record a command or open it in a terminal, not both. Running a
   history item uses it too, so the command moves to the top, as in v0.
-- Commands start in the home folder. v0 used the focused terminal's folder
-  (`omarchy-cmd-terminal-cwd`), which a plugin can't ask for. **Follow-up
-  before M15**: a `Platform` hook for it (for example, `terminal` with no
-  `cwd` using the focused terminal's folder on Omarchy), so M15 doesn't
-  ship that change to users.
+- Commands name no `cwd`. v0 used the focused terminal's folder
+  (`omarchy-cmd-terminal-cwd`), which a plugin can't ask for, so a
+  follow-up before M15 made it the platform's choice: a `terminal` with
+  no `cwd` opens in the focused terminal's folder on Omarchy, or home.
 
 **Done when** `tests/test_terminal_mode.py`'s cases are ported and pass,
 plus the migration cases, and `>` works in `tools/dev.py`.
