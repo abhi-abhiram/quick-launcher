@@ -3,16 +3,15 @@
 //! Each method builds its argv with a pure function, so tests check the
 //! commands without running them.
 
-use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use std::{env, thread};
 
-use super::{Dirs, Platform, non_empty};
+use super::{Dirs, Platform, command, detach, non_empty, reap, strings, xdg_dirs};
 
-/// The platform the core runs on today.
+/// The Linux platform.
 #[derive(Debug, Clone)]
 pub struct Omarchy {
     dirs: Dirs,
@@ -174,67 +173,10 @@ pub(crate) fn login_argv(argv: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// The core's directories from the XDG base directory variables, read
-/// through `var`. Unset, empty and relative values take the XDG default, as
-/// the spec says.
-pub(crate) fn xdg_dirs(var: impl Fn(&str) -> Option<OsString>) -> io::Result<Dirs> {
-    let home = var("HOME")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME is not an absolute path"))?;
-    let base = |name: &str, default: &str| {
-        var(name)
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .unwrap_or_else(|| home.join(default))
-            .join("quick-launcher")
-    };
-    let data = base("XDG_DATA_HOME", ".local/share");
-    let config = base("XDG_CONFIG_HOME", ".config");
-    let state = base("XDG_STATE_HOME", ".local/state");
-    Ok(Dirs {
-        bundled_plugins: data.join("plugins"),
-        user_plugins: config.join("plugins"),
-        config_file: config.join("config.toml"),
-        plugin_config: config,
-        plugin_state: state,
-        home,
-    })
-}
-
-fn strings<const N: usize>(parts: [&str; N]) -> impl Iterator<Item = String> {
-    parts.into_iter().map(String::from)
-}
-
-/// Runs argv in `cwd` without waiting for it, reaping it on another thread.
-fn detach(argv: Vec<String>, cwd: &Path) -> io::Result<()> {
-    let child = command(&argv, cwd).stdin(Stdio::null()).spawn()?;
-    reap(child);
-    Ok(())
-}
-
-/// argv as a command in `cwd`. stdout is the frontend protocol, so nothing
-/// started may write to it; stderr goes to the core's log.
-fn command(argv: &[String], cwd: &Path) -> Command {
-    let (program, args) = argv.split_first().expect("every builder names a program");
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .current_dir(cwd)
-        .stdout(Stdio::null())
-        .stderr(Stdio::inherit());
-    command
-}
-
-fn reap(mut child: Child) {
-    thread::spawn(move || {
-        let _ = child.wait();
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
 
     fn argv(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|part| part.to_string()).collect()

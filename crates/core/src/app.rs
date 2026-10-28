@@ -22,7 +22,7 @@ use crate::frontend::{Incoming, Unread};
 use crate::host::lines::Lines;
 use crate::host::{Answer, Launch, Persistent, oneshot};
 use crate::log::Log;
-use crate::platform::{Omarchy, Platform};
+use crate::platform::{Native, Platform};
 use crate::run_action;
 use crate::session::{Effect, Event, Session};
 use crate::{Registry, discovery};
@@ -108,10 +108,11 @@ pub fn main() -> ExitCode {
     ExitCode::from(code)
 }
 
-/// The platform: Omarchy, or with the `recording-platform` feature and
+/// The platform: [`Native`] (Omarchy on Linux, macOS on a Mac), or with the
+/// `recording-platform` feature and
 /// `QL_RECORD` set, a recording one that writes calls to that file.
 fn platform(options: &Options) -> io::Result<Box<dyn Platform + Send + Sync>> {
-    let mut dirs = Omarchy::from_env()?.dirs().clone();
+    let mut dirs = Native::from_env()?.dirs().clone();
     if let Some(dir) = &options.bundled_plugins {
         dirs.bundled_plugins = std::path::absolute(dir)?;
     }
@@ -120,7 +121,7 @@ fn platform(options: &Options) -> io::Result<Box<dyn Platform + Send + Sync>> {
         let recording = crate::platform::Recording::to_file(dirs, path.as_ref())?;
         return Ok(Box::new(recording));
     }
-    Ok(Box::new(Omarchy::with_dirs(dirs)))
+    Ok(Box::new(Native::with_dirs(dirs)))
 }
 
 /// Runs the main loop, then stops every persistent plugin. Returns the exit
