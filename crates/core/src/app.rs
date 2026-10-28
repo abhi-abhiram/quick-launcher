@@ -225,6 +225,8 @@ impl Plugins {
     /// now (a rebuilt binary, a changed manifest).
     fn rescanned(&mut self) {
         self.persistent.clear();
+        self.requests
+            .retain(|_, sent| !matches!(sent, Sent::Persistent(_)));
     }
 
     /// Closes every persistent plugin's stdin and waits briefly for them to

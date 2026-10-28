@@ -715,3 +715,20 @@ async fn shutting_down_an_unused_plugin_starts_nothing() {
     assert!(!fixture.has_pid());
     assert_eq!(running.log.get(), [] as [String; 0]);
 }
+
+#[tokio::test]
+async fn a_persistent_plugin_that_cant_start_doesnt_use_up_its_restarts() {
+    // Not executable.
+    let fixture = Fixture::with_bin(&|dir| fs::write(dir.join("bin"), "").unwrap(), PERSISTENT);
+    let mut running = Running::start(&fixture);
+    for id in 0..=MAX_RESTARTS as u64 + 1 {
+        running.query(id, "a");
+        let failure = running.failure(id).await;
+        assert!(matches!(failure, Failure::Start(_)), "{failure:?}");
+    }
+    let log = running.log.get();
+    assert!(logged(&log, "fixture: can't start"), "{log:?}");
+    assert!(!logged(&log, "restarting it"), "{log:?}");
+    assert!(!logged(&log, "won't be started again"), "{log:?}");
+    running.plugin.shutdown().await.unwrap();
+}

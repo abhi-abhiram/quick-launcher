@@ -32,11 +32,17 @@ use super::{Answer, Failure, Launch, forward, next_stderr, peek, read_response, 
 pub const MAX_RESTARTS: usize = 3;
 
 /// See [`MAX_RESTARTS`].
-pub const RESTART_WINDOW: Duration = Duration::from_secs(60);
+const RESTART_WINDOW: Duration = Duration::from_secs(60);
 
 /// How long a plugin gets to exit after its stdin is closed before it's
 /// killed.
-pub const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
+const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
+
+/// How many dropped requests are remembered, to drop their late answers
+/// without logging. A plugin may ignore `cancel` and never finish a
+/// request, so past this the set is cleared; ids are never reused within a
+/// process, so that costs at most a log line per late answer.
+const DROPPED_LIMIT: usize = 64;
 
 /// A `persistent` plugin. Dropping it closes the plugin's stdin and lets
 /// the plugin exit, as [`Persistent::shutdown`] does, without waiting.
@@ -87,6 +93,10 @@ impl Persistent {
     /// Closes the plugin's stdin and waits up to [`SHUTDOWN_GRACE`] for it
     /// to exit, then kills it. The returned handle finishes once the
     /// process is gone. Requests still waiting get no answer.
+    ///
+    /// A write already in progress finishes first, and a write can take up
+    /// to `timeout_ms` when the plugin stops reading stdin, which only a
+    /// plugin not built with the SDK does.
     pub fn shutdown(self) -> JoinHandle<()> {
         drop(self.commands);
         self.task
@@ -124,8 +134,8 @@ struct Host<F> {
     /// Process request ids cancelled or timed out whose final answer hasn't
     /// arrived. Their answers are dropped without a word.
     dropped: HashSet<u64>,
-    /// Whether the process was started before, making the next start a
-    /// restart.
+    /// Whether the process was started successfully before, making the
+    /// next start a restart.
     started: bool,
     /// When each restart within the last [`RESTART_WINDOW`] happened.
     restarts: VecDeque<Instant>,
@@ -209,6 +219,9 @@ impl<F: FnMut(u64, Answer)> Host<F> {
 
     /// Forgets request `id` and tells the plugin to stop working on it.
     async fn drop_request(&mut self, id: u64) {
+        if self.dropped.len() >= DROPPED_LIMIT {
+            self.dropped.clear();
+        }
         self.dropped.insert(id);
         let Some(process) = self.process.as_mut() else {
             return;
@@ -221,7 +234,9 @@ impl<F: FnMut(u64, Answer)> Host<F> {
         self.write(&encode(&cancel)).await;
     }
 
-    /// Starts the process, unless it exited too often.
+    /// Starts the process, unless it exited too often. A start that fails
+    /// isn't an exit: until the process has started once, nothing counts
+    /// against [`MAX_RESTARTS`].
     fn start(&mut self) -> Result<(), Failure> {
         if self.given_up {
             return Err(Failure::GaveUp);
@@ -248,7 +263,6 @@ impl<F: FnMut(u64, Answer)> Host<F> {
             self.restarts.push_back(now);
             self.launch.log("restarting it");
         }
-        self.started = true;
         let mut child = self.launch.start().map_err(|error| {
             self.launch
                 .log(format_args!("can't start {:?}: {error}", self.launch.argv));
@@ -261,6 +275,7 @@ impl<F: FnMut(u64, Answer)> Host<F> {
             child,
             next_id: 1,
         });
+        self.started = true;
         Ok(())
     }
 

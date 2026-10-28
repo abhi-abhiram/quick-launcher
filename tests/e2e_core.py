@@ -403,7 +403,6 @@ class Shutdown(Core):
             time.sleep(0.01)
 
 
-
 class PersistentPlugin(Core):
     def setUp(self):
         super().setUp()
@@ -435,6 +434,26 @@ class PersistentPlugin(Core):
         self.assertNotIn("stopping it", self.log_text(), "it exited once its stdin closed")
         if sys.platform.startswith("linux"):
             self.assertFalse(running(int(pid)), f"plugin process {pid} is still running")
+
+    def test_a_rescan_restarts_the_plugin_as_it_is_now(self):
+        client = self.ready()
+        client.open()
+        client.settled_state()
+        client.input("keep: a")
+        [(_, pid)] = self.items_for(client, 1)
+
+        self.add_plugin("other", "list")
+        client.open()
+        client.settled_state()
+        client.input("keep: b")
+        [(ref, new_pid)] = self.items_for(client, 2)
+        self.assertEqual(ref, "keep/b")
+        self.assertNotEqual(new_pid, pid, "a new process after the rescan")
+        if sys.platform.startswith("linux"):
+            deadline = time.monotonic() + 5
+            while running(int(pid)):
+                self.assertLess(time.monotonic(), deadline, f"old plugin process {pid} is still running")
+                time.sleep(0.01)
 
 
 def running(pid):

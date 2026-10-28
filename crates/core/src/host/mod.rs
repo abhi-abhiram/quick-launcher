@@ -30,7 +30,7 @@ pub(crate) mod lines;
 mod persistent;
 
 use lines::Lines;
-pub use persistent::{MAX_RESTARTS, Persistent, RESTART_WINDOW, SHUTDOWN_GRACE};
+pub use persistent::{MAX_RESTARTS, Persistent};
 
 /// After a plugin exits, how long to wait for the rest of its stderr. A
 /// process it started could hold stderr open for good.
@@ -145,8 +145,8 @@ pub enum Failure {
     NoResponse(Duration),
     /// The process ended without a final answer.
     Exited(Option<ExitStatus>),
-    /// A `persistent` plugin stopped too often and isn't started again
-    /// until the core restarts.
+    /// A `persistent` plugin exited more than [`MAX_RESTARTS`] times
+    /// within a minute and isn't started again until the core restarts.
     GaveUp,
 }
 
