@@ -32,6 +32,7 @@ which is the one-step switch the spec asks for (*Migrating from v0*).
 | M13 | [`terminal` plugin](#m13--terminal-plugin) | `>` mode, from the terminal | M3 |
 | M14 | [Plugin host: persistent, streaming, cancel](#m14--plugin-host-persistent-streaming-cancel) | `cargo test` | M7, M11 |
 | M15 | [Switch the Omarchy frontend](#m15--switch-the-omarchy-frontend) | **the shell launcher on v1** | M12–M14 |
+| M16 | [macOS platform and frontend](#m16--macos-platform-and-frontend) | **the launcher on a Mac** | M15 |
 
 "Depends on" lists what a milestone needs to be built and tested. Trying a
 plugin through the core needs more: the core gains modes in M9, hints in
@@ -569,3 +570,34 @@ Branch `feat/omarchy-v1`. One PR, as the spec requires.
 covers apps search and launch, `pi:` with pin and unpin, `>` with run and
 forget, Tab and Backspace mode changes, opening straight into a mode with
 `'{"mode":"pi"}'`, and fast typing of `pi:launch`.
+
+### M16 — macOS platform and frontend
+
+Branch `macos-frontend`. Added after v1, as the second platform and
+frontend the spec leaves room for (*Rules that keep the core agnostic*).
+
+**Goal.** The launcher runs on macOS, with the same core, plugins and data
+folders as on Omarchy.
+
+**Scope** (*Platform*, *Apps are a plugin*, *Frontend protocol*)
+
+- `platform/macos.rs`: `MacOs`, with `open`, `pbcopy`, a self-removing
+  `.command` script for `terminal` and `$SHELL -lc` for `login_command`.
+  `platform::Native` picks it on macOS; both platforms build and are
+  tested on every OS.
+- The `apps` plugin lists `.app` bundles on macOS.
+- `frontends/macos/`: a SwiftPM package. `QuickLauncherKit` holds the
+  frontend protocol and a port of `Launcher.qml`'s rules (stale states,
+  selection, action keys), tested with XCTest; `QuickLauncher` is the menu
+  bar app: a Carbon hotkey, a non-activating panel and a SwiftUI list.
+- `install.py` builds and installs the app on macOS; CI gains a macOS job.
+
+**Done when** CI is green on Linux and macOS, `tests/test_install.py`
+covers the app bundle, and a manual check on a Mac covers: the hotkey
+opening and closing the panel, the panel taking typing without
+activating the app (and handing the keyboard back on close), apps search
+and launch, `pi:` and `>` with their alternate actions, Tab and Backspace
+mode changes, right-clicking a row and choosing an action without the
+panel closing first, clicking elsewhere closing it, typing through an
+input method (Japanese, say), Open at Login, and
+`open "quick-launcher://open?mode=pi"`.

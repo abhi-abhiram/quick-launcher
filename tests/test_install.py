@@ -279,6 +279,26 @@ class MacInstallTest(unittest.TestCase):
         self.assertIs(info["LSUIElement"], True)
         self.assertEqual(info["CFBundleURLTypes"][0]["CFBundleURLSchemes"], ["quick-launcher"])
 
+    def test_a_pre_release_version_becomes_a_valid_bundle_version(self):
+        for version, expected in [("0.2.0-rc1", "0.2.0"), ("1.2.3", "1.2.3"), ("2", "2"), ("dev", "0")]:
+            self.assertEqual(install.info_plist(version)["CFBundleVersion"], expected, version)
+            self.assertEqual(install.info_plist(version)["CFBundleShortVersionString"], expected, version)
+
+    def test_a_failed_swap_puts_the_old_app_back(self):
+        self.install()
+        real_rename = Path.rename
+
+        def rename(path, target):
+            if path.name == "Quick Launcher.app" and path.parent != self.apps:
+                raise OSError("disk full")
+            return real_rename(path, target)
+
+        self.executable.write_text("new app")
+        with mock.patch.object(Path, "rename", rename), self.assertRaises(OSError):
+            self.install()
+        self.assertEqual((self.app / "Contents/MacOS/QuickLauncher").read_text(), "app")
+        self.assertEqual(sorted(path.name for path in self.apps.iterdir()), ["Quick Launcher.app"])
+
     def test_reinstall_replaces_the_app_whole(self):
         self.install()
         (self.app / "Contents/leftover").write_text("old")
@@ -301,7 +321,7 @@ class MacInstallTest(unittest.TestCase):
             messages = install.uninstall_macos(self.data, self.apps)
         self.assertFalse(self.app.exists())
         self.assertFalse((self.data / "quick-launcher").exists())
-        self.assertEqual(len(messages), 3)
+        self.assertTrue(any("Login Items" in message for message in messages))
 
     def test_the_app_builds_with_swiftpm(self):
         shown = mock.Mock(stdout="/src/frontends/macos/.build/release\n")

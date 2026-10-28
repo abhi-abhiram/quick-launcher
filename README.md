@@ -118,7 +118,7 @@ What's different on a Mac:
   `launchctl setenv QL_TERMINAL_APP iTerm` and restart Quick Launcher.
   Without a folder of their own they start in your home folder.
 - Plugins with `env = "login"` (pi) run through your login shell
-  (`$SHELL -l`, zsh unless it's bash, sh or ksh), so `~/.zprofile` settings
+  (`$SHELL -lc`, zsh unless it's bash, sh, ksh or dash), so `~/.zprofile` settings
   such as Homebrew's `PATH` apply.
 - The bundled plugins' icons are Nerd Font glyphs. Install one
   (`brew install --cask font-symbols-only-nerd-font`) to see them; without

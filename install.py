@@ -323,9 +323,17 @@ def build_mac_app(swift: str, source: Path = ROOT) -> Path:
     return Path(shown.stdout.strip()) / MAC_EXECUTABLE
 
 
+def bundle_version(version: str) -> str:
+    """`version` as a bundle version, which is up to three integers: a
+    pre-release suffix such as `-rc1` is dropped."""
+    match = re.match(r"\d+(\.\d+){0,2}", version)
+    return match[0] if match else "0"
+
+
 def info_plist(version: str) -> dict:
     """The app's Info.plist: a menu bar app (no Dock icon) that opens
     quick-launcher:// URLs."""
+    version = bundle_version(version)
     return {
         "CFBundleIdentifier": MAC_BUNDLE_ID,
         "CFBundleName": "Quick Launcher",
@@ -367,7 +375,11 @@ def install_mac_app(app_dir: Path, executable: Path, version: str) -> Path:
         if target.exists():
             retired = target.with_name(f".{MAC_APP_NAME}-old-{stamp()}")
             target.rename(retired)
-            bundle.rename(target)
+            try:
+                bundle.rename(target)
+            except OSError:
+                retired.rename(target)
+                raise
             shutil.rmtree(retired)
         else:
             bundle.rename(target)
@@ -418,6 +430,9 @@ def uninstall_macos(data_home: Path, app_dir: Path) -> list:
         messages.append(f"Removed {app}")
     for path in uninstall_core(data_home):
         messages.append(f"Removed {path}")
+    # Like the user's config on Linux, the hotkey setting stays.
+    messages.append("If you turned on Open at Login, remove Quick Launcher in System Settings > "
+                    "General > Login Items.")
     return messages
 
 

@@ -48,10 +48,13 @@ impl MacOs {
     pub fn with_dirs(dirs: Dirs) -> MacOs {
         let var = |name: &str| env::var(name).ok().filter(|value| !value.is_empty());
         MacOs {
+            // They hold the user's command lines, so they're kept with the
+            // core's own state rather than in a shared temporary folder. A
+            // name starting with `.` can't be a plugin's state folder.
+            scripts: dirs.plugin_state.join(".terminal-scripts"),
             dirs,
             terminal_app: var("QL_TERMINAL_APP").unwrap_or_else(|| DEFAULT_TERMINAL_APP.into()),
             login_shell: login_shell(var("SHELL").as_deref()),
-            scripts: env::temp_dir().join("quick-launcher"),
         }
     }
 
@@ -117,13 +120,18 @@ impl Platform for MacOs {
         let mut child = command(&copy_argv(), &self.dirs.home)
             .stdin(Stdio::piped())
             .spawn()?;
-        // pbcopy sets the clipboard once stdin closes, so the text is
-        // written before returning and a failed write is reported.
+        // pbcopy sets the clipboard once stdin closes and then exits, so
+        // waiting for it is quick, and a failed write or a failed pbcopy is
+        // reported.
         let mut stdin = child.stdin.take().expect("stdin is piped");
         let written = stdin.write_all(text.as_bytes());
         drop(stdin);
-        reap(child);
-        written
+        let status = child.wait()?;
+        written?;
+        if !status.success() {
+            return Err(io::Error::other(format!("pbcopy failed ({status})")));
+        }
+        Ok(())
     }
 
     fn login_command(&self, argv: &[String]) -> Vec<String> {

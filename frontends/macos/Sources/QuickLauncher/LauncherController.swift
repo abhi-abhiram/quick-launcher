@@ -50,6 +50,9 @@ final class LauncherController: NSObject, ObservableObject, NSWindowDelegate {
     /// The pointer's last position, so a row is selected by hover only when
     /// the pointer moves, not when the list scrolls under it.
     private var lastPointer = NSPoint(x: -1, y: -1)
+    /// A menu (a row's right-click menu, say) is open. It may take the key
+    /// status from the panel, which then isn't a click elsewhere.
+    private var menuTracking = false
 
     init(core: CoreProcess) {
         self.core = core
@@ -60,6 +63,19 @@ final class LauncherController: NSObject, ObservableObject, NSWindowDelegate {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, event.window === self.panel else { return event }
             return self.handleKey(event) ? nil : event
+        }
+        let center = NotificationCenter.default
+        center.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) {
+            [weak self] _ in
+            self?.menuTracking = true
+        }
+        center.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) {
+            [weak self] _ in
+            guard let self else { return }
+            self.menuTracking = false
+            // The menu ran an action that ended the session, or it didn't
+            // and the panel takes the keyboard back.
+            if self.panel.isVisible && !self.panel.isKeyWindow { self.panel.makeKey() }
         }
     }
 
@@ -138,7 +154,7 @@ final class LauncherController: NSObject, ObservableObject, NSWindowDelegate {
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        if panel.isVisible { hide() }
+        if panel.isVisible && !menuTracking { hide() }
     }
 
     /// Places the panel a fifth of the way down the pointer's screen, with

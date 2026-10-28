@@ -66,7 +66,7 @@ fn bundles_are_listed_by_name_with_their_path_as_id_and_icon() {
 fn an_earlier_root_hides_a_bundle_with_the_same_name() {
     let root = Root::new("precedence");
     let mine = root.bundle("user/Firefox.app");
-    root.bundle("system/Firefox.app");
+    root.bundle("system/firefox.app");
     root.bundle("system/Notes.app");
     let apps = find_bundles(&[root.0.join("user"), root.0.join("system")]);
     assert_eq!(names(&apps), ["Firefox", "Notes"]);
@@ -96,9 +96,16 @@ fn symlinked_bundles_are_listed_but_symlinked_folders_are_not_walked() {
 
 #[test]
 fn the_users_applications_come_first() {
-    let roots = roots(Path::new("/Users/me"));
+    let roots = roots(Some(Path::new("/Users/me")));
     assert_eq!(roots[0], Path::new("/Users/me/Applications"));
     assert!(roots.contains(&PathBuf::from("/Applications")));
+}
+
+#[test]
+fn without_an_absolute_home_only_the_system_folders_are_searched() {
+    for home in [None, Some(Path::new("")), Some(Path::new("me"))] {
+        assert_eq!(roots(home)[0], Path::new("/Applications"), "{home:?}");
+    }
 }
 
 #[cfg(target_os = "macos")]

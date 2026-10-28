@@ -17,26 +17,28 @@ use crate::{App, AppIcon};
 const MAX_DEPTH: usize = 2;
 
 /// Where apps are looked for, highest precedence first: the user's
-/// Applications folder, the system's, and Finder, which lives elsewhere.
-/// A root may be a bundle itself.
-pub fn roots(home: &Path) -> Vec<PathBuf> {
-    vec![
-        home.join("Applications"),
-        "/Applications".into(),
-        "/System/Applications".into(),
-        "/System/Library/CoreServices/Finder.app".into(),
-    ]
+/// Applications folder (when there's an absolute home), the system's, and
+/// Finder, which lives elsewhere. A root may be a bundle itself.
+pub fn roots(home: Option<&Path>) -> Vec<PathBuf> {
+    home.filter(|home| home.is_absolute())
+        .map(|home| home.join("Applications"))
+        .into_iter()
+        .chain([
+            "/Applications".into(),
+            "/System/Applications".into(),
+            "/System/Library/CoreServices/Finder.app".into(),
+        ])
+        .collect()
 }
 
 /// [`roots`] for the process's `HOME`.
 pub fn roots_from_process() -> Vec<PathBuf> {
-    let home = env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-    roots(&home)
+    roots(env::var_os("HOME").map(PathBuf::from).as_deref())
 }
 
 /// Every bundle under `roots`, sorted by name. A bundle hides one with the
-/// same file name under a later root, so a copy in `~/Applications` wins
-/// over the system's. Folders inside bundles aren't searched, and
+/// same file name, ignoring case as APFS does, under a later root, so a
+/// copy in `~/Applications` wins over the system's. Folders inside bundles aren't searched, and
 /// symlinked folders aren't followed (symlinked bundles are), so a link
 /// cycle can't hang the walk. Unreadable folders are reported on stderr and
 /// skipped.
@@ -52,7 +54,12 @@ pub fn find_bundles(roots: &[PathBuf]) -> Vec<App> {
     let mut seen = HashSet::new();
     let mut apps: Vec<App> = paths
         .into_iter()
-        .filter(|path| seen.insert(path.file_name().map(|name| name.to_owned())))
+        .filter(|path| {
+            seen.insert(
+                path.file_name()
+                    .map(|name| name.to_string_lossy().to_lowercase()),
+            )
+        })
         .filter_map(|path| app(&path))
         .collect();
     apps.sort_by(|a, b| (a.name.to_lowercase(), &a.id).cmp(&(b.name.to_lowercase(), &b.id)));

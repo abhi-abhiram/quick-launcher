@@ -239,11 +239,13 @@ async fn a_slow_answer_within_the_timeout_is_used() {
 
 #[tokio::test]
 async fn a_plugin_still_running_after_answering_is_killed() {
-    let fixture = Fixture::new("slow", "kind = \"query\"\ntimeout_ms = 1000");
+    // Long enough for a first start on a busy macOS runner, where a new
+    // binary is scanned before it runs, to answer in time.
+    let fixture = Fixture::new("slow", "kind = \"query\"\ntimeout_ms = 3000");
     let (answers, log) = fixture.run(query("linger")).await;
     assert_eq!(final_ids(&answers), ["late"]);
     assert!(
-        logged(&log, "still running 1000 ms after answering"),
+        logged(&log, "still running 3000 ms after answering"),
         "{log:?}"
     );
     fixture.assert_gone();
