@@ -18,10 +18,10 @@ The keywords MUST, SHOULD and MAY are used as in RFC 2119.
 - **Nothing passes through a shell.** Actions are argv arrays.
 - **The core doesn't care about the frontend.** Any program that speaks the
   [frontend protocol](#frontend-protocol) is a frontend: the Omarchy shell
-  window today, and a macOS window, a terminal client or a test script later.
+  window, the macOS app, and a terminal client or a test script later.
   The core never knows which one is connected.
-- **The core is platform-agnostic.** Omarchy is the only supported platform
-  for now, but only one platform module inside the core knows that.
+- **The core is platform-agnostic.** Omarchy and macOS are supported, and
+  only the platform modules inside the core know which one it runs on.
 - **Rust only, for the core and every plugin.** Plugins are written against
   the SDK's `Plugin` trait. How the SDK talks to the core is private to the
   two, so it can change without breaking plugin code. This is a contract,
@@ -49,8 +49,9 @@ The keywords MUST, SHOULD and MAY are used as in RFC 2119.
 
 - **Frontend**: draws the list and takes input. It holds no launcher logic
   and no search of its own: it sends what was typed or chosen and draws the
-  state the core sends back. The only frontend today is the Omarchy shell
-  plugin (`frontends/omarchy/Launcher.qml`).
+  state the core sends back. The frontends are the Omarchy shell plugin
+  (`frontends/omarchy/Launcher.qml`) and the macOS menu bar app
+  (`frontends/macos/`).
 - **Core**: `quick-launcher-core`, one Rust binary. It discovers plugins,
   parses prefixes, runs plugin processes, filters and ranks every item (apps
   included), and runs actions through its platform module.
@@ -68,8 +69,8 @@ together with mode hints and other global items and sends one finished list.
 Every frontend gets apps without writing an app search, and the core holds
 everything that can be launched in one place.
 
-Finding apps is OS-specific, and that code lives in the plugin: a macOS build
-of it would read `/Applications` instead. Launching goes through `Platform`
+Finding apps is OS-specific, and that code lives in the plugin: its macOS
+build lists the `.app` bundles in the Applications folders instead. Launching goes through `Platform`
 with the [`app`](#actions) run form. The cost is Omarchy's app-library extras
 (launch feedback, uninstall); see [Open questions](#open-questions).
 
@@ -86,9 +87,11 @@ with the [`app`](#actions) run form. The cost is Omarchy's app-library extras
   clipboard, config and state paths, login environments) goes through the
   `Platform` trait. No other core module calls OS tools directly.
 - Nothing plugin-specific lives in the core. The core never knows what pi is.
-- There is exactly one `Platform` implementation and one frontend until a
-  second is actually being built. No stubs, no `cfg` branches for platforms
-  that don't exist yet.
+- A `Platform` implementation or a frontend is added only when it's actually
+  being built. No stubs, no `cfg` branches for platforms that don't exist
+  yet. There are two of each today, Omarchy and macOS; `platform::Native`
+  picks the core's at build time, and both are compiled and tested on every
+  OS.
 
 ## Frontend protocol
 
@@ -311,7 +314,8 @@ The core reads plugins from, in order:
 1. the bundled plugin directory, `$XDG_DATA_HOME/quick-launcher/plugins/<id>/`
 2. the user plugin directory, `$XDG_CONFIG_HOME/quick-launcher/plugins/<id>/`
 
-These are the Omarchy (Linux) paths; the core gets them from `Platform`. The
+These are the Omarchy (Linux) paths, and macOS uses the same ones; the core
+gets them from `Platform`. The
 bundled directory is per user because `install.py` builds the plugins from
 source for that user, next to the core binary
 (`$XDG_DATA_HOME/quick-launcher/bin/quick-launcher-core`, which the Omarchy
@@ -455,7 +459,7 @@ user triggers them is up to the frontend (see
 |------|--------|
 | `{"exec": [argv], "cwd": "..."}` | Start detached. |
 | `{"terminal": [argv], "cwd": "..."}` | Start in the user's terminal. |
-| `{"app": "<app id>"}` | Launch an installed app by its platform id (a desktop entry id such as `firefox.desktop` on Omarchy). Used by `apps`. |
+| `{"app": "<app id>"}` | Launch an installed app by its platform id (a desktop entry id such as `firefox.desktop` on Omarchy, a bundle path such as `/Applications/Safari.app` on macOS). Used by `apps`. |
 | `{"open": "url or path"}` | Open with the default handler. |
 | `{"copy": "text"}` | Put text on the clipboard. |
 | `{"plugin": "<action id>"}` | Send `activate` to the plugin and apply its `result`, which can name another form to run. |
@@ -463,7 +467,8 @@ user triggers them is up to the frontend (see
 `cwd` is optional; a relative `cwd` resolves against the home folder.
 Without one, `exec` starts in the home folder and `terminal` in a folder
 the platform picks: on Omarchy, the focused terminal's folder (what
-`omarchy-cmd-terminal-cwd` prints), or home when there is none. In
+`omarchy-cmd-terminal-cwd` prints), or home when there is none; on
+macOS, home. In
 `exec`, a relative program path (the first argv entry, when it contains a
 `/`, such as `./run.sh` or `bin/tool`) resolves against the plugin folder.
 A bare program name is looked up on `PATH`, and the other arguments are
@@ -519,7 +524,8 @@ paths themselves, so they stay portable.
 
 With `env = "session"` the plugin inherits the core's environment, which is
 the fast path. With `env = "login"` the core starts it through the platform's
-login shell (`bash -lc` on Omarchy, about 15 ms per start). That's for
+login shell (`bash -lc` on Omarchy, `$SHELL -lc` on macOS, about 15 ms per
+start). That's for
 plugins that read variables set only in shell profiles (pi's
 `PI_CODING_AGENT_*`).
 
@@ -654,8 +660,8 @@ a model, say) SHOULD stop.
 
 ## Platform
 
-Everything OS-specific in the core sits behind one trait. Its only
-implementation today is `Omarchy`:
+Everything OS-specific in the core sits behind one trait, implemented by
+`Omarchy` and `MacOs`:
 
 ```rust
 pub trait Platform {
@@ -678,15 +684,15 @@ pub trait Platform {
 }
 ```
 
-| method          | Omarchy |
-|-----------------|---------|
-| `spawn`         | `setsid uwsm-app -- <argv>` |
-| `terminal`      | `setsid uwsm-app -- xdg-terminal-exec --dir=<cwd> <argv>`; with no `cwd`, the folder `omarchy-cmd-terminal-cwd` prints, or home |
-| `launch_app`    | `setsid uwsm-app -- <id>` |
-| `open`          | `xdg-open` |
-| `copy`          | `wl-copy` |
-| `login_command` | `bash -lc 'exec "$@"' bash <argv>` |
-| `dirs`          | XDG base directories, as listed above |
+| method          | Omarchy | macOS |
+|-----------------|---------|-------|
+| `spawn`         | `setsid uwsm-app -- <argv>` | argv in a process group of its own |
+| `terminal`      | `setsid uwsm-app -- xdg-terminal-exec --dir=<cwd> <argv>`; with no `cwd`, the folder `omarchy-cmd-terminal-cwd` prints, or home | `open -a Terminal <script>.command`, a private script that removes itself, changes to `cwd` (or home) and `exec`s argv, every argument single-quoted; `QL_TERMINAL_APP` names another terminal app |
+| `launch_app`    | `setsid uwsm-app -- <id>` | `open -a <id>` |
+| `open`          | `xdg-open` | `open` |
+| `copy`          | `wl-copy` | `pbcopy` |
+| `login_command` | `bash -lc 'exec "$@"' bash <argv>` | the same with `$SHELL` when it's zsh, bash, sh, ksh or dash, else `/bin/zsh` |
+| `dirs`          | XDG base directories, as listed above | the same |
 
 Core tests use a recording `Platform` that stores calls instead of running
 them, so actions are tested without launching anything.
@@ -729,8 +735,10 @@ plugins/apps/              bundled plugin: plugin.toml + Rust binary
 plugins/pi/                bundled plugin: plugin.toml + Rust binary
 plugins/terminal/          bundled plugin: plugin.toml + Rust binary
 frontends/omarchy/         Omarchy shell plugin: manifest.json, Launcher.qml
+frontends/macos/           macOS menu bar app: a SwiftPM package
 docs/protocol.md           this document
-install.py                 Omarchy installer: builds, copies, enables
+install.py                 installer: builds, copies, enables (Omarchy) or
+                           installs the app (macOS)
 ```
 
 ### Repository strategy

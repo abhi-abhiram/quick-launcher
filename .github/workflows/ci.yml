@@ -28,6 +28,19 @@ jobs:
       - run: cargo clippy -p quick-launcher-core --all-targets --features recording-platform -- -D warnings
       - run: python3 tests/e2e_core.py -v
 
+  # The macOS platform, the apps plugin's bundle search and the Swift app
+  # only build or run on a Mac, so this job runs on a GitHub-hosted one.
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal --component clippy && rustup default stable
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: python3 tests/e2e_core.py -v
+      - run: swift build -c release --package-path frontends/macos
+      - run: swift test --package-path frontends/macos
+
   install:
     runs-on: tenki-standard-small-2c-4g
     steps:
