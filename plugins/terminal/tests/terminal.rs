@@ -169,6 +169,20 @@ fn run_remembers_then_opens_a_terminal_that_stays_open() {
 }
 
 #[test]
+fn history_is_readable_by_its_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let dirs = Dirs::new("mode");
+    let env = dirs.env();
+    run(&env, "export TOKEN=secret");
+    let mode = |file: &Path| fs::metadata(file).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&env.history_file()), 0o600);
+    // Rewriting a file someone made readable doesn't keep that mode.
+    fs::set_permissions(env.history_file(), fs::Permissions::from_mode(0o644)).unwrap();
+    run(&env, "ls");
+    assert_eq!(mode(&env.history_file()), 0o600);
+}
+
+#[test]
 fn blank_command_is_rejected() {
     let dirs = Dirs::new("blank");
     let env = dirs.env();

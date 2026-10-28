@@ -12,8 +12,9 @@
 
 use std::env;
 use std::fs;
-use std::io;
-use std::path::PathBuf;
+use std::io::{self, Write};
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, anyhow, bail};
 use quick_launcher_plugin::{Action, Activate, After, Item, Outcome, Plugin, Run};
@@ -110,7 +111,8 @@ fn parse_history(text: &str) -> anyhow::Result<Vec<String>> {
 
 /// Replaces the plugin's history file with the first [`HISTORY_LIMIT`]
 /// commands, atomically. Only ever this plugin's own file, so v0's stays as
-/// it was.
+/// it was. Commands can hold secrets, so the file is readable by its owner
+/// only, as v0's was.
 pub fn write_history(env: &Env, commands: &[String]) -> anyhow::Result<()> {
     let file = env.history_file();
     fs::create_dir_all(&env.state_dir)
@@ -121,11 +123,27 @@ pub fn write_history(env: &Env, commands: &[String]) -> anyhow::Result<()> {
     let kept = &commands[..commands.len().min(HISTORY_LIMIT)];
     let mut text = serde_json::to_string_pretty(&json!({ "commands": kept }))?;
     text.push('\n');
-    let written = fs::write(&temporary, text).and_then(|()| fs::rename(&temporary, &file));
+    let written = write_private(&temporary, &text).and_then(|()| fs::rename(&temporary, &file));
     if written.is_err() {
         let _ = fs::remove_file(&temporary);
     }
     written.with_context(|| format!("writing {}", file.display()))
+}
+
+/// Writes `text` to a new file at `path` with mode 0600. A file left there
+/// by an earlier run with the same process id is replaced, so it can't
+/// pass on its own mode.
+fn write_private(path: &Path, text: &str) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    fs::File::options()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?
+        .write_all(text.as_bytes())
 }
 
 /// Puts `command` first, once. The first change carries v0's history
@@ -160,6 +178,8 @@ pub fn items(commands: &[String]) -> Vec<Item> {
                 .detail("Run again")
                 .icon(ICON)
                 .action(Action::new("run", "Run"))
+                // `after` is ignored for `plugin` actions: the plugin's
+                // `Outcome::refresh()` refreshes. It says what to expect.
                 .action(Action::new("forget", "Forget").after(After::Refresh))
         })
         .collect()

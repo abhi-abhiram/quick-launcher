@@ -348,8 +348,8 @@ impl Session {
         match outcome {
             Err(error) => {
                 self.log
-                    .write(format_args!("couldn't run {:?}: {error}", running.title));
-                self.action_error = Some(format!("Couldn't run “{}”: {error}", running.title));
+                    .write(format_args!("couldn't run {}: {error}", running.title));
+                self.action_error = Some(format!("Couldn't run {}: {error}", running.title));
                 vec![self.state()]
             }
             Ok(()) => match then {
@@ -377,7 +377,7 @@ impl Session {
             Answer::Result(result) => result,
             Answer::Failed(failure) => {
                 self.log
-                    .write(format_args!("couldn't run {title:?}: {failure}"));
+                    .write(format_args!("couldn't run {title}: {failure}"));
                 // Unlike a list or query error (`failure_message`), the
                 // plugin's own message goes without its name: the action's
                 // title already says what failed.
@@ -385,7 +385,7 @@ impl Session {
                     Failure::Plugin(message) => message,
                     failure => format!("{} {failure}", self.plugins[plugin].manifest.name),
                 };
-                self.action_error = Some(format!("Couldn't run “{title}”: {reason}"));
+                self.action_error = Some(format!("Couldn't run {title}: {reason}"));
                 return vec![self.state()];
             }
             Answer::Items { .. } => {
@@ -397,11 +397,11 @@ impl Session {
             Some(Run::Plugin(action)) => {
                 // Answering with another `plugin` action could loop forever.
                 self.log.write(format_args!(
-                    "not running {title:?}: its result asks for plugin action {action:?}, \
+                    "not running {title}: its result asks for plugin action {action:?}, \
                      and a result can only ask for a platform run"
                 ));
                 self.action_error = Some(format!(
-                    "Couldn't run “{title}”: {} answered with another plugin action",
+                    "Couldn't run {title}: {} answered with another plugin action",
                     self.plugins[plugin].manifest.name
                 ));
                 vec![self.state()]
@@ -445,7 +445,7 @@ impl Session {
         match query {
             Some(query) if current != mode => {
                 self.log.write(format_args!(
-                    "not replacing the text with {query:?} from {title:?}: \
+                    "not replacing the text with {query:?} from {title}: \
                      the mode changed since it was chosen"
                 ));
             }
@@ -770,7 +770,9 @@ impl Session {
             ));
             return vec![self.state()];
         }
-        let title = action.title.clone();
+        // What failed, in messages: the action and the item it ran on, since
+        // a title alone ("Run") doesn't say which command or project.
+        let title = format!("“{}” for “{}”", action.title, item.label);
         if let Run::Plugin(plugin_action) = &action.run {
             // `after` is ignored: the plugin's `result` decides.
             let params = ActivateParams {

@@ -195,7 +195,9 @@ pub struct ActivateResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query: Option<String>,
     /// Run this through the platform first, as if the action had run it,
-    /// then apply the rest. Never a `plugin` run.
+    /// then apply the rest. It's the same type as an action's `run`, but a
+    /// `plugin` run here is refused: the core runs nothing, drops the rest
+    /// and shows an error. The SDK can't build one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<Run>,
 }

@@ -618,9 +618,11 @@ Every response has `v` and echoes the request `id`.
     own action would run it (`cwd`, relative paths and `env = "login"`
     apply the same way), then apply the rest of the result. It lets one
     action change the plugin's data and start something, as the terminal
-    plugin's "run" records a command and opens it. It can't be another
-    `plugin` run. If it fails, the launcher stays open and shows the error,
-    as for any action that fails.
+    plugin's "run" action records a command and opens it. It can't be
+    another `plugin` run: the core then runs nothing, ignores the rest of
+    the result and shows an error, keeping the launcher open. If the run
+    fails, the launcher also stays open and shows the error, as for any
+    action that fails.
 
   The core applies only the newest activation's `result`: a newer
   `activate`, or `close` or `open`, drops the answer to an older one.

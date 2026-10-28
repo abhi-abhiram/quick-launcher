@@ -557,7 +557,7 @@ fn a_failed_action_shows_an_error_until_the_next_input() {
     let state = only_state(test.session.handle(Event::Ran(Err("no wl-copy".into()))));
     assert_eq!(
         state.error.as_deref(),
-        Some("Couldn't run “Copy”: no wl-copy")
+        Some("Couldn't run “Copy” for “A”: no wl-copy")
     );
     assert_eq!(refs(&state), ["apps/a"]);
     assert_eq!(test.input(1, "a").error, None);
@@ -1883,7 +1883,7 @@ fn an_activate_error_keeps_the_items_and_shows_until_the_next_input() {
     let state = only_state(test.answer(id, failed));
     assert_eq!(
         state.error.as_deref(),
-        Some("Couldn't run “PIN”: pins.json is not valid JSON")
+        Some("Couldn't run “PIN” for “B”: pins.json is not valid JSON")
     );
     assert_eq!(refs(&state), ["apps/b"]);
     assert_eq!(test.input(2, "b").error, None);
@@ -1892,14 +1892,14 @@ fn an_activate_error_keeps_the_items_and_shows_until_the_next_input() {
     let timeout = Answer::Failed(Failure::NoResponse(Duration::from_millis(2000)));
     assert_eq!(
         only_state(test.answer(id, timeout)).error.as_deref(),
-        Some("Couldn't run “PIN”: APPS didn't respond within 2000 ms")
+        Some("Couldn't run “PIN” for “B”: APPS didn't respond within 2000 ms")
     );
 
     let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
     let crash = Answer::Failed(Failure::Exited(None));
     assert_eq!(
         only_state(test.answer(id, crash)).error.as_deref(),
-        Some("Couldn't run “PIN”: APPS stopped without answering")
+        Some("Couldn't run “PIN” for “B”: APPS stopped without answering")
     );
 }
 
@@ -1941,6 +1941,27 @@ fn a_run_in_a_result_runs_from_the_plugin_then_the_result_applies() {
 }
 
 #[test]
+fn a_run_in_a_result_then_applies_its_query_unless_the_mode_changed() {
+    let copy = Run::Copy("b".into());
+    let (mut test, _) = with_pinnable();
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    let effects = test.answer(id, with_run(result(false, false, Some("a")), copy.clone()));
+    assert!(matches!(&effects[..], [Effect::Run { .. }]), "{effects:?}");
+    let state = only_state(test.session.handle(Event::Ran(Ok(()))));
+    assert_eq!(state.text, "a");
+
+    // A mode entered while it ran drops the query, as without a run.
+    let mut test = Test::new(vec![global("apps"), plugin("pi", "")]);
+    let [apps] = test.open()[..] else { panic!() };
+    test.items(apps, vec![pinnable("b", "B", "pin")]);
+    let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
+    test.answer(id, with_run(result(false, false, Some("a")), copy));
+    test.input_in(1, None, "pi:");
+    let state = last_state(&test.session.handle(Event::Ran(Ok(()))));
+    assert_eq!((mode_id(&state), state.text.as_str()), (Some("pi"), ""));
+}
+
+#[test]
 fn a_run_in_a_result_that_fails_keeps_the_launcher_open_with_the_error() {
     let (mut test, _) = with_pinnable();
     let (id, ..) = activate_request(&test.activate("apps/b", "pin"));
@@ -1949,7 +1970,7 @@ fn a_run_in_a_result_that_fails_keeps_the_launcher_open_with_the_error() {
     let state = only_state(test.session.handle(Event::Ran(Err("no wl-copy".into()))));
     assert_eq!(
         state.error.as_deref(),
-        Some("Couldn't run “PIN”: no wl-copy")
+        Some("Couldn't run “PIN” for “B”: no wl-copy")
     );
     assert_eq!(refs(&state), ["apps/b"]);
 }
@@ -1965,7 +1986,7 @@ fn a_plugin_run_in_a_result_runs_nothing() {
     let state = only_state(effects);
     assert_eq!(
         state.error.as_deref(),
-        Some("Couldn't run “PIN”: APPS answered with another plugin action")
+        Some("Couldn't run “PIN” for “B”: APPS answered with another plugin action")
     );
     assert_eq!(test.session.handle(Event::Ran(Ok(()))), []);
 }
