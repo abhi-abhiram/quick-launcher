@@ -145,8 +145,10 @@ pub enum Failure {
     NoResponse(Duration),
     /// The process ended without a final answer.
     Exited(Option<ExitStatus>),
-    /// A `persistent` plugin exited more than [`MAX_RESTARTS`] times
-    /// within a minute and isn't started again until the core restarts.
+    /// A `persistent` plugin that had started needed more than
+    /// [`MAX_RESTARTS`] restarts within a minute (after exiting, or after a
+    /// restart that failed) and isn't started again until the core
+    /// restarts.
     GaveUp,
 }
 
