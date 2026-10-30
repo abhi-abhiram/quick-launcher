@@ -3,12 +3,12 @@
 A keyboard launcher for the Omarchy shell that replaces the apps menu. With
 no prefix it searches applications, just like the stock menu. Typing a mode prefix switches the suggestions to that mode:
 
-| Prefix          | Mode     | Suggestions                                        | Enter                      | Shift+Enter / right-click |
-|-----------------|----------|----------------------------------------------------|----------------------------|---------------------------|
-| *(none)*        | Apps     | Installed applications                             | Launch the app             | —                         |
-| `pi:`           | pi       | Pinned, then recently used pi projects             | Open pi in the project     | Pin / unpin               |
-| `>` or `term:`  | Terminal | The typed command, then commands run before        | Run it in a new terminal   | Forget a past command     |
-| `cd:` or `proj:`| Projects | Saved project folders, most recently used first    | Open a terminal there      | Remove it (also Ctrl+D)   |
+| Prefix           | Mode     | Suggestions                                     | Enter                    | Shift+Enter / right-click     |
+|------------------|----------|-------------------------------------------------|--------------------------|-------------------------------|
+| *(none)*         | Apps     | Installed applications                          | Launch the app           | —                             |
+| `pi:`            | pi       | Pinned, then recently used pi projects          | Open pi in the project   | Pin / unpin                   |
+| `>` or `term:`   | Terminal | The typed command, then commands run before     | Run it in a new terminal | Forget a past command         |
+| `cd:` or `proj:` | Projects | Saved project folders, most recently used first | Open a terminal there    | Remove it (also Shift+Delete) |
 
 Typing part of a mode's prefix or name (`p`, `term`) suggests the mode, and
 **Tab** jumps into it. **Backspace** on an empty query leaves the mode. Up/Down

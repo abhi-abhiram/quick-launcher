@@ -615,6 +615,7 @@ class BundledPlugins(Core):
         self.assertEqual(json.loads(history.read_text()), {"commands": ["ls"]})
         self.assertEqual(self.calls(), [run, ls, run])
 
+    # --- projects
 
     def projects_state(self, client, predicate=lambda m: True):
         return client.wait_for(

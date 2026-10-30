@@ -184,7 +184,7 @@ fn adding_a_folder_saves_it_first_and_goes_back_to_the_list() {
     let actions = &items[0]["actions"];
     assert_eq!(actions[0]["id"], "open");
     assert_eq!(actions[1]["id"], "remove");
-    assert_eq!(actions[1]["key"], "ctrl+d");
+    assert_eq!(actions[1]["key"], "shift+delete");
 }
 
 #[test]
@@ -209,23 +209,33 @@ fn search_matches_only_saved_projects_by_name_or_path() {
 #[test]
 fn a_path_lists_saved_projects_under_it_first_and_not_again_as_folders() {
     let dirs = Dirs::new("saved-path");
-    dirs.mkdirs(&["Projects/ql", "Projects/qt"]);
+    dirs.mkdirs(&["Projects/ql", "Projects/qt", "Projects2/x"]);
     let env = dirs.env();
-    activate(&env, &format!("folder:{}", dirs.path("Projects/qt")), "add");
+    for rel in ["Projects/qt", "Projects2/x"] {
+        activate(&env, &format!("folder:{}", dirs.path(rel)), "add");
+    }
+    // A saved folder isn't offered for adding again.
+    let items = query(&env, "~/Projects/");
+    assert_eq!(labels(&items), ["qt", "~/Projects", "ql/"]);
+    assert_eq!(items[0]["complete"], "~/Projects/qt/");
+
+    // A saved folder the typed name completes to is listed among the
+    // folders, as the project.
     let items = query(&env, "~/Projects/q");
     assert_eq!(
         ids(&items),
         [
-            format!("project:{}", dirs.path("Projects/qt")),
             format!("folder:{}", dirs.path("Projects/ql")),
+            format!("project:{}", dirs.path("Projects/qt")),
         ]
     );
-    assert_eq!(items[0]["complete"], "~/Projects/qt/");
-    // A saved folder isn't offered for adding again.
-    assert_eq!(
-        labels(&query(&env, "~/Projects/")),
-        ["qt", "~/Projects", "ql/"]
-    );
+    assert_eq!(items[1]["complete"], "~/Projects/qt/");
+
+    // Only projects under the folder come first, so Tab on `~/Projects`
+    // goes to `~/Projects/`, not into `~/Projects2/x`.
+    let items = query(&env, "~/Projects");
+    assert_eq!(labels(&items), ["Projects/", "Projects2/"]);
+    assert_eq!(items[0]["complete"], "~/Projects/");
 }
 
 #[test]
@@ -287,6 +297,34 @@ fn a_broken_projects_file_still_completes_folders() {
     fs::write(env.projects_file(), "not json").unwrap();
     assert_eq!(ids(&query(&env, "")), ["add"]);
     assert_eq!(labels(&query(&env, "~/P")), ["Projects/"]);
+
+    // Saving replaces it, rather than failing until it's deleted by hand.
+    let projects = dirs.path("Projects");
+    let result = activate(&env, &format!("folder:{projects}"), "add");
+    assert_eq!(result["result"], json!({"close": false, "query": ""}));
+    assert_eq!(
+        read_projects(&env).unwrap(),
+        std::slice::from_ref(&projects)
+    );
+    fs::write(env.projects_file(), "not json").unwrap();
+    let result = activate(&env, &format!("project:{projects}"), "remove");
+    assert_eq!(result["result"], json!({"close": false, "refresh": true}));
+    assert!(read_projects(&env).unwrap().is_empty());
+}
+
+#[test]
+fn a_path_that_cant_be_expanded_still_offers_the_add_row() {
+    let dirs = Dirs::new("tilde-user");
+    for text in ["~ro", "~root/x"] {
+        assert_eq!(ids(&query(&dirs.env(), text)), ["add"], "{text}");
+    }
+}
+
+#[test]
+fn an_action_without_a_folder_says_so() {
+    let dirs = Dirs::new("no-folder");
+    let error = activate(&dirs.env(), "add", "add");
+    assert_eq!(error["error"]["message"], "no folder was chosen");
 }
 
 #[test]

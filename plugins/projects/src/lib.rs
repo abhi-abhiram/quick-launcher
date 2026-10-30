@@ -117,10 +117,20 @@ pub fn write_projects(env: &Env, projects: &[String]) -> anyhow::Result<()> {
     written.with_context(|| format!("writing {}", file.display()))
 }
 
+/// The saved projects, or none when the file is broken, which is logged.
+/// So a broken file still lets folders be completed, and the next save
+/// replaces it rather than failing until it's deleted by hand.
+pub fn read_projects_or_none(env: &Env) -> Vec<String> {
+    read_projects(env).unwrap_or_else(|e| {
+        eprintln!("ignoring saved projects: {e:#}");
+        Vec::new()
+    })
+}
+
 /// Puts `path` first, once: adding a project and opening one both make it
 /// the most recent.
 pub fn touch(env: &Env, path: &str) -> anyhow::Result<()> {
-    let mut projects = read_projects(env)?;
+    let mut projects = read_projects_or_none(env);
     projects.retain(|project| project != path);
     projects.insert(0, path.to_owned());
     write_projects(env, &projects)
@@ -128,7 +138,7 @@ pub fn touch(env: &Env, path: &str) -> anyhow::Result<()> {
 
 /// Removes `path` from the saved projects. The folder itself is untouched.
 pub fn remove(env: &Env, path: &str) -> anyhow::Result<()> {
-    let mut projects = read_projects(env)?;
+    let mut projects = read_projects_or_none(env);
     projects.retain(|project| project != path);
     write_projects(env, &projects)
 }
@@ -254,7 +264,7 @@ pub fn project_item(path: &str, home: &Path, complete: Option<String>) -> Item {
         .detail(display_path(path, home))
         .icon(ICON)
         .action(Action::new("open", "Open terminal"))
-        .action(Action::new("remove", "Remove").key("ctrl+d"));
+        .action(Action::new("remove", "Remove").key("shift+delete"));
     if !Path::new(path).is_dir() {
         item = item.badge("missing").disabled(true);
     }
@@ -300,9 +310,10 @@ pub fn items(projects: &[String], text: &str, home: &Path) -> Vec<Item> {
     items
 }
 
-/// The items for a typed path: the saved projects under it, then the
-/// folder itself when the path ends in `/` and it isn't saved, then the
-/// folders it completes to that aren't saved.
+/// The items for a typed path: the saved project it names, and the ones
+/// under it once it ends in `/`; then that folder itself when the path
+/// ends in `/` and it isn't saved; then the folders it completes to. A path that can't be
+/// expanded (`~user`) offers the add row, so there's always a row to pick.
 fn path_items(projects: &[String], text: &str, home: &Path) -> Vec<Item> {
     // Completions keep the form the user typed: `~/…` or absolute.
     let shown = |path: &str| {
@@ -312,25 +323,25 @@ fn path_items(projects: &[String], text: &str, home: &Path) -> Vec<Item> {
             path.to_owned()
         }
     };
-    let typed = expand(text, home).map(|path| path.to_string_lossy().into_owned());
-    let listed: Vec<&String> = match &typed {
-        Some(typed) => {
-            let folder = typed.trim_end_matches('/');
-            projects
-                .iter()
-                .filter(|path| path.as_str() == folder || path.starts_with(typed.as_str()))
-                .collect()
-        }
-        None => Vec::new(),
+    let Some(typed) = expand(text, home).map(|path| path.to_string_lossy().into_owned()) else {
+        return vec![add_item()];
     };
+    // The folder itself, and once the path ends in `/`, the projects under
+    // it. Before that, the first row is what Tab completes the name to, as
+    // `cd` would: `~/Projects` goes to `~/Projects/`, never into a project
+    // under it or under `~/Projects2`.
+    let folder = typed.trim_end_matches('/');
+    let under = format!("{folder}/");
+    let listed: Vec<&String> = projects
+        .iter()
+        .filter(|path| path.as_str() == folder || (text.ends_with('/') && path.starts_with(&under)))
+        .collect();
     let mut items: Vec<Item> = listed
         .iter()
         .map(|path| project_item(path, home, Some(format!("{}/", shown(path)))))
         .collect();
     if text.ends_with('/') || text == "~" {
-        let folder = typed
-            .as_deref()
-            .map(|typed| normalize(Path::new(typed)))
+        let folder = Some(normalize(Path::new(&typed)))
             .filter(|folder| Path::new(folder).is_dir() && !projects.contains(folder));
         if let Some(folder) = folder {
             items.push(
@@ -373,20 +384,13 @@ pub fn terminal_run(path: &str) -> Run {
 /// projects.
 pub struct Projects(pub Env);
 
-impl Projects {
-    /// The saved projects. A broken file lists none, so folders can still
-    /// be completed; saving one replaces it.
-    fn projects(&self) -> Vec<String> {
-        read_projects(&self.0).unwrap_or_else(|e| {
-            eprintln!("ignoring saved projects: {e:#}");
-            Vec::new()
-        })
-    }
-}
-
 impl Plugin for Projects {
     fn query(&mut self, query: &Query) -> anyhow::Result<Vec<Item>> {
-        Ok(items(&self.projects(), query.text(), &self.0.home))
+        Ok(items(
+            &read_projects_or_none(&self.0),
+            query.text(),
+            &self.0.home,
+        ))
     }
 
     fn activate(&mut self, activate: Activate) -> anyhow::Result<Outcome> {
@@ -396,6 +400,9 @@ impl Plugin for Projects {
             .or_else(|| id.strip_prefix("folder:"))
             .unwrap_or_default();
         let existing = || -> anyhow::Result<()> {
+            if path.is_empty() {
+                bail!("no folder was chosen");
+            }
             if !Path::new(path).is_dir() {
                 bail!("{} is not a folder", display_path(path, &self.0.home));
             }

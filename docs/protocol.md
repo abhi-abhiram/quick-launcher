@@ -829,6 +829,7 @@ The bundled plugins, once ported:
 | `apps`     | list  | oneshot    | `global = true`; reads desktop entries, skips `NoDisplay`/`Hidden`, launches with `run.app` |
 | `pi`       | list  | oneshot    | `env = "login"`; pin/unpin via `plugin` actions |
 | `terminal` | list  | oneshot    | `query_item` runs the typed command; history items run it again, Shift+Enter forgets it |
+| `projects` | query | persistent | saved project folders open a terminal there; a path starting with `~` or `/` lists the folders it completes to, each with a `complete`, so Tab works as in `cd` |
 
 ## Migrating from v0
 
@@ -849,7 +850,8 @@ keeping the v0 loader and matcher in QML next to the core, which is exactly
 the logic the core exists to remove. Order of work:
 
 1. The core and SDK, tested with fixture plugins and the scripted frontend test.
-2. `apps`, `pi` and `terminal` written as Rust plugins.
+2. `apps`, `pi` and `terminal` written as Rust plugins. (`projects` came after the switch, with item
+   `complete`.)
 3. `Launcher.qml` switched to the frontend protocol, with its app search
    removed. `modes.json`, `modes/*.py` and `LauncherModel.js` are deleted in
    the same change.
