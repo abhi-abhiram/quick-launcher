@@ -38,6 +38,7 @@ def setUpModule():
         # The bundled plugins, which `BundledPlugins` lays out.
         ("quick-launcher-apps", []),
         ("quick-launcher-pi", []),
+        ("quick-launcher-projects", []),
         ("quick-launcher-terminal", []),
     ]:
         subprocess.run(
@@ -613,6 +614,60 @@ class BundledPlugins(Core):
         self.terminal_state(client, lambda m: m["text"] == "make test" and refs(m) == ["terminal:query:make test"])
         self.assertEqual(json.loads(history.read_text()), {"commands": ["ls"]})
         self.assertEqual(self.calls(), [run, ls, run])
+
+    # --- projects
+
+    def projects_state(self, client, predicate=lambda m: True):
+        return client.wait_for(
+            lambda m: m["type"] == "state" and not m["loading"]
+            and (m["mode"] or {}).get("id") == "projects" and predicate(m)
+        )
+
+    def test_projects_adds_folders_with_tab_completion_and_opens_only_saved_ones(self):
+        (self.home / "Projects/quick-launcher").mkdir(parents=True)
+        (self.home / "Projects/notes").mkdir()
+        (self.home / "Programs").mkdir()
+        project = str(self.home / "Projects/quick-launcher")
+        client = self.ready()
+        client.open()
+        client.settled_state()
+        client.input("cd:")
+        state = self.projects_state(client)
+        self.assertEqual(refs(state), ["projects/add"])
+
+        # Tab outside a path starts one; Tab in a path completes the
+        # selected folder, or the first.
+        client.complete("projects/add")
+        state = self.projects_state(client, lambda m: m["text"] == "~/")
+        labels = [item["label"] for item in state["items"]]
+        self.assertEqual(labels[0], "~")
+        self.assertLess(labels.index("Programs/"), labels.index("Projects/"))
+        client.input("~/Proj")
+        self.projects_state(client, lambda m: m["text"] == "~/Proj")
+        client.complete()
+        state = self.projects_state(client, lambda m: m["text"] == "~/Projects/")
+        self.assertEqual([item["label"] for item in state["items"]], ["~/Projects", "notes/", "quick-launcher/"])
+        client.complete(f"projects/folder:{project}")
+        state = self.projects_state(client, lambda m: m["text"] == "~/Projects/quick-launcher/")
+
+        # Adding it goes back to the list, where it's the only project.
+        client.activate(f"projects/folder:{project}", "add")
+        state = self.projects_state(client, lambda m: m["text"] == "")
+        self.assertEqual(refs(state), [f"projects/project:{project}", "projects/add"])
+        saved = self.home / "state/quick-launcher/projects/projects.json"
+        self.assertEqual(json.loads(saved.read_text()), {"projects": [project]})
+
+        # A search finds saved projects only.
+        client.input("note")
+        state = self.projects_state(client, lambda m: m["text"] == "note")
+        self.assertEqual(refs(state), ["projects/add"])
+        client.input("quick")
+        state = self.projects_state(client, lambda m: m["text"] == "quick")
+        self.assertEqual(refs(state)[0], f"projects/project:{project}")
+        client.activate(f"projects/project:{project}", "open")
+        client.wait_for(lambda m: m["type"] == "done")
+        shell = ["sh", "-c", 'exec "${SHELL:-bash}"']
+        self.assertEqual(self.calls(), [{"terminal": {"argv": shell, "cwd": project}}])
 
 
 class Rescan(Core):

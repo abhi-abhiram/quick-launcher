@@ -351,7 +351,7 @@ mod tests {
             }
         }
         ids.sort();
-        assert_eq!(ids, ["apps", "pi", "terminal"]);
+        assert_eq!(ids, ["apps", "pi", "projects", "terminal"]);
     }
 
     #[test]

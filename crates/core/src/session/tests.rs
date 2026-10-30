@@ -47,6 +47,7 @@ fn copy(id: &str, label: &str) -> Item {
         keywords: Vec::new(),
         disabled: false,
         score: None,
+        complete: None,
         actions: vec![Action {
             id: None,
             title: "Copy".into(),
@@ -1411,6 +1412,60 @@ fn complete_does_nothing_without_a_hint() {
             .iter()
             .any(|line| line.contains("nothing to complete"))
     );
+}
+
+/// A query mode showing two folders whose `complete` is their path, after
+/// `files:~/P` was typed with seq 1.
+fn completing() -> Test {
+    let mut test = Test::new(vec![plugin("files", "kind = \"query\"")]);
+    test.open();
+    let files = request_id(&test.input_in(1, None, "files:~/P"), "files");
+    let folder = |id: &str, label: &str, complete: &str| Item {
+        complete: Some(complete.into()),
+        ..copy(id, label)
+    };
+    test.items(
+        files,
+        vec![
+            folder("pictures", "Pictures/", "~/Pictures/"),
+            folder("projects", "Projects/", "~/Projects/"),
+        ],
+    );
+    test
+}
+
+#[test]
+fn complete_in_a_mode_replaces_the_text_with_the_selected_items_completion() {
+    let mut test = completing();
+    let effects = complete(&mut test, Some("files/projects"));
+    assert_eq!(requests(&effects), [("files", &query("~/Projects/"))]);
+    let state = last_state(&effects);
+    assert_eq!(mode_id(&state), Some("files"));
+    assert_eq!(state.text, "~/Projects/");
+    assert_eq!(
+        state.seq, 1,
+        "carries the last seq, so the frontend takes the text"
+    );
+}
+
+#[test]
+fn complete_in_a_mode_without_a_selected_completion_takes_the_first() {
+    let mut test = completing();
+    for item in [None, Some("files/gone"), Some("files:query:x")] {
+        let state = last_state(&complete(&mut test, item));
+        assert_eq!(state.text, "~/Pictures/", "{item:?}");
+        test.input_in(2, Some("files"), "~/P");
+    }
+}
+
+#[test]
+fn complete_in_a_mode_without_completions_does_nothing() {
+    let mut test = Test::new(vec![plugin("files", "kind = \"query\"")]);
+    test.open();
+    let files = request_id(&test.input_in(1, None, "files:x"), "files");
+    test.items(files, vec![copy("a", "A")]);
+    assert_eq!(complete(&mut test, Some("files/a")), []);
+    assert_eq!(complete(&mut test, None), []);
 }
 
 #[test]

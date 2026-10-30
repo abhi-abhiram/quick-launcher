@@ -3,11 +3,12 @@
 A keyboard launcher for the Omarchy shell that replaces the apps menu. With
 no prefix it searches applications, just like the stock menu. Typing a mode prefix switches the suggestions to that mode:
 
-| Prefix          | Mode     | Suggestions                                        | Enter                      | Shift+Enter / right-click |
-|-----------------|----------|----------------------------------------------------|----------------------------|---------------------------|
-| *(none)*        | Apps     | Installed applications                             | Launch the app             | —                         |
-| `pi:`           | pi       | Pinned, then recently used pi projects             | Open pi in the project     | Pin / unpin               |
-| `>` or `term:`  | Terminal | The typed command, then commands run before        | Run it in a new terminal   | Forget a past command     |
+| Prefix           | Mode     | Suggestions                                     | Enter                    | Shift+Enter / right-click     |
+|------------------|----------|-------------------------------------------------|--------------------------|-------------------------------|
+| *(none)*         | Apps     | Installed applications                          | Launch the app           | —                             |
+| `pi:`            | pi       | Pinned, then recently used pi projects          | Open pi in the project   | Pin / unpin                   |
+| `>` or `term:`   | Terminal | The typed command, then commands run before     | Run it in a new terminal | Forget a past command         |
+| `cd:` or `proj:` | Projects | Saved project folders, most recently used first | Open a terminal there    | Remove it (also Shift+Delete) |
 
 Typing part of a mode's prefix or name (`p`, `term`) suggests the mode, and
 **Tab** jumps into it. **Backspace** on an empty query leaves the mode. Up/Down
@@ -20,11 +21,19 @@ Pinned folders that no longer exist are dimmed and marked *missing*. Terminal
 commands run in an interactive bash (so aliases work) in the focused terminal's
 folder, and the terminal stays open afterwards.
 
+The projects mode only opens folders you've saved. Typing a name, or part of
+a path, searches the saved projects. To add one, pick **Add a project
+folder…** (or press Tab) or type a path starting with `~` or `/`: the list
+switches to the folders that path completes to, as `cd` does in a shell.
+**Tab** completes the selected folder, Enter saves it, and Shift+Enter saves
+it and opens a terminal there. Folders starting with `.` show once you type
+the `.`.
+
 ## How it works
 
 The launcher is a Rust program, `quick-launcher-core`, plus plugins. The core
 finds the plugins, reads prefixes, filters and ranks every item, and runs the
-action you pick. Each mode is a plugin: `apps`, `pi` and `terminal` are
+action you pick. Each mode is a plugin: `apps`, `pi`, `projects` and `terminal` are
 bundled, and you can add your own. The Omarchy shell plugin
 (`frontends/omarchy/Launcher.qml`) only draws what the core sends and passes
 on what you type. [docs/protocol.md](docs/protocol.md) is the full design.
@@ -83,6 +92,8 @@ Each plugin keeps its files in its own folders:
 - Pinned pi projects: `~/.config/quick-launcher/pi/pinned.json`
   (`{"projects": ["/path/to/project"]}`), editable by hand
 - Terminal history: `~/.local/state/quick-launcher/terminal/history.json`
+- Saved projects: `~/.local/state/quick-launcher/projects/projects.json`
+  (`{"projects": ["/path/to/project"]}`, most recent first)
 - Your plugins: `~/.config/quick-launcher/plugins/<id>/`
 - Settings: `~/.config/quick-launcher/config.toml`, for example:
 

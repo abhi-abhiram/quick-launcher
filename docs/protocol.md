@@ -113,7 +113,7 @@ are given in parentheses as examples; another frontend picks its own.
 | `open`       | `mode` (optional plugin id) | A session starts (window shown), optionally straight into a mode. The core resets to that mode (or none) with empty text, refreshes list plugins as needed, and sends `state`. |
 | `input`      | `seq` (int), `mode` (plugin id or `null`), `text` (string) | The typed text changed. `mode` is the mode the frontend is showing with its text (`null` before the first `state`), and `text` is all the text typed in that mode, without its prefix. `seq` increases with every `input`. See [Reading input as the user saw it](#reading-input-as-the-user-saw-it). |
 | `leave_mode` | — | Leave the active mode. The core puts the prefix the user typed to enter it (the mode's first prefix if it was entered another way), minus its last character, back into the text, as if the user had deleted the `:`. Does nothing without an active mode. (Backspace on empty text.) |
-| `complete`   | `item` (string, optional) | Enter a mode: the selected row's, when `item` is a [mode hint](#mode-hints)'s `ref`, otherwise the first mode hint's, if any. A hint's `ref` enters its mode even if the current `state` no longer shows that hint, since the user chose it on the screen they saw; an `activate` of such a `ref` instead runs nothing and sends `state` (below). (Tab.) |
+| `complete`   | `item` (string, optional) | Complete the text. In the plain search, enter a mode: the selected row's, when `item` is a [mode hint](#mode-hints)'s `ref`, otherwise the first mode hint's, if any. In a mode, replace the text with the `complete` of the item `item` names, otherwise of the first shown item that has one, and read it as if typed; the `state` answering it carries the last `seq` sent, so the frontend takes the new text. A hint's `ref` enters its mode even if the current `state` no longer shows that hint, since the user chose it on the screen they saw; an `activate` of such a `ref` instead runs nothing and sends `state` (below). (Tab.) |
 | `activate`   | `item` (string), `action` (string) | Run an action. `item` is the item's `ref`, `action` an action `id`. (Enter, Shift+Enter, click, an action's `key`.) |
 | `close`      | — | The session ended without running anything. (Escape, window hidden.) |
 
@@ -426,6 +426,7 @@ The SDK handles both; the lifetime is only a manifest setting.
 | `keywords` | string[] | no       | Extra filter terms, not shown. |
 | `disabled` | bool     | no       | Shown dimmed; the first action cannot run. Other actions can (so a missing pinned folder can still be unpinned). |
 | `score`    | number   | no       | `query` plugins only: higher ranks first. Otherwise list order is kept. |
+| `complete` | string   | no       | What completing the item (Tab) turns the typed text into, in its mode, such as a folder path ending in `/`. See `complete` in [Frontend → core](#frontend--core). |
 | `actions`  | Action[] | yes      | At least one. |
 
 The core turns each item into a [frontend item](#frontend-items), with `ref`
@@ -728,6 +729,7 @@ crates/wire/               wire format types and the matcher, shared by core
 plugins/apps/              bundled plugin: plugin.toml + Rust binary
 plugins/pi/                bundled plugin: plugin.toml + Rust binary
 plugins/terminal/          bundled plugin: plugin.toml + Rust binary
+plugins/projects/          bundled plugin: plugin.toml + Rust binary
 frontends/omarchy/         Omarchy shell plugin: manifest.json, Launcher.qml
 docs/protocol.md           this document
 install.py                 Omarchy installer: builds, copies, enables
@@ -827,6 +829,7 @@ The bundled plugins, once ported:
 | `apps`     | list  | oneshot    | `global = true`; reads desktop entries, skips `NoDisplay`/`Hidden`, launches with `run.app` |
 | `pi`       | list  | oneshot    | `env = "login"`; pin/unpin via `plugin` actions |
 | `terminal` | list  | oneshot    | `query_item` runs the typed command; history items run it again, Shift+Enter forgets it |
+| `projects` | query | persistent | saved project folders open a terminal there; a path starting with `~` or `/` lists the folders it completes to, each with a `complete`, so Tab works as in `cd` |
 
 ## Migrating from v0
 
@@ -847,7 +850,8 @@ keeping the v0 loader and matcher in QML next to the core, which is exactly
 the logic the core exists to remove. Order of work:
 
 1. The core and SDK, tested with fixture plugins and the scripted frontend test.
-2. `apps`, `pi` and `terminal` written as Rust plugins.
+2. `apps`, `pi` and `terminal` written as Rust plugins. (`projects` came after the switch, with item
+   `complete`.)
 3. `Launcher.qml` switched to the frontend protocol, with its app search
    removed. `modes.json`, `modes/*.py` and `LauncherModel.js` are deleted in
    the same change.

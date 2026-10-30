@@ -40,6 +40,7 @@ impl Item {
             keywords: Vec::new(),
             disabled: false,
             score: None,
+            complete: None,
             actions: Vec::new(),
         })
     }
@@ -82,6 +83,14 @@ impl Item {
     /// `query` plugins only: higher ranks first.
     pub fn score(mut self, score: f64) -> Self {
         self.0.score = Some(score);
+        self
+    }
+
+    /// What completing the item (Tab) turns the typed text into, such as
+    /// a folder's path with a trailing `/`. The core then queries the mode
+    /// with it, as if the user had typed it.
+    pub fn complete(mut self, text: impl Into<String>) -> Self {
+        self.0.complete = Some(text.into());
         self
     }
 
