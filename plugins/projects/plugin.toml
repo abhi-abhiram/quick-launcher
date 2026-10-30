@@ -1,0 +1,12 @@
+protocol = 1
+id = "projects"
+name = "Projects"
+description = "Open a terminal in a saved project folder"
+icon = "󰉋"
+prefixes = ["cd:", "proj:"]
+placeholder = "Search projects, or type ~/ to add one…"
+bin = "projects-plugin"
+# Items depend on the text: saved projects for a name, folder completions
+# for a path.
+kind = "query"
+lifetime = "persistent"

@@ -31,6 +31,10 @@ pub struct Item {
     /// `query` plugins only: higher ranks first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub score: Option<f64>,
+    /// What completing this item (Tab) turns the typed text into, in its
+    /// mode. The text is read as the mode's query, as if typed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub complete: Option<String>,
     /// The first is the default action, the second the alternate.
     pub actions: Vec<Action>,
 }

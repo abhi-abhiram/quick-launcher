@@ -74,6 +74,9 @@ class CoreClient:
         self.text = text
         self.send("input", seq=self.seq, mode=self.mode, text=text)
 
+    def complete(self, item=None):
+        self.send("complete", **({"item": item} if item else {}))
+
     def activate(self, item, action):
         self.send("activate", item=item, action=action)
 

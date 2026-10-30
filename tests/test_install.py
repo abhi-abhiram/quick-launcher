@@ -82,7 +82,7 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(core.read_text(), "quick-launcher-core")
         self.assertTrue(core.stat().st_mode & 0o111)
         plugins = self.data / "quick-launcher/plugins"
-        self.assertEqual(sorted(p.name for p in plugins.iterdir()), ["apps", "pi", "terminal"])
+        self.assertEqual(sorted(p.name for p in plugins.iterdir()), ["apps", "pi", "projects", "terminal"])
         for _, manifest in install.plugin_layout.bundled_plugins():
             folder = plugins / manifest["id"]
             self.assertEqual(sorted(p.name for p in folder.iterdir()), sorted(["plugin.toml", manifest["bin"]]))
@@ -147,8 +147,8 @@ class InstallTest(unittest.TestCase):
 
         [(command,), kwargs] = run.call_args
         self.assertEqual(command[:6], ["cargo", "build", "--release", "--locked", "--target-dir", str(ROOT / "target")])
-        self.assertEqual(command[6::2], ["--bin"] * 4)
-        self.assertEqual(command[7::2], ["quick-launcher-core", "apps", "pi-plugin", "terminal-plugin"])
+        self.assertEqual(command[6::2], ["--bin"] * 5)
+        self.assertEqual(command[7::2], ["quick-launcher-core", "apps", "pi-plugin", "projects-plugin", "terminal-plugin"])
         self.assertEqual(kwargs, {"cwd": ROOT, "check": True})
         self.assertEqual(bin_dir, ROOT / "target/release")
 
