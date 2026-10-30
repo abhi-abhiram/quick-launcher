@@ -1,6 +1,8 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
+import plistlib
 import tempfile
 import unittest
 from unittest import mock
@@ -232,6 +234,111 @@ class InstallTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             install.update_shell_config(self.config, enable=True)
         self.assertEqual(self.backups(self.shell_json), [])
+
+
+class MacInstallTest(unittest.TestCase):
+    """The macOS install: the same core and plugins, plus the app bundle.
+    Nothing here needs a Mac; building and signing are left out."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        root = Path(self.temp.name)
+        self.data = root / "data"
+        self.apps = root / "Applications"
+        self.bin = fake_binaries(root / "release")
+        self.executable = root / "swift/QuickLauncher"
+        self.executable.parent.mkdir()
+        self.executable.write_text("app")
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def install(self, version="1.2.3"):
+        return install.install_macos(self.data, self.apps, self.bin, self.executable, version)
+
+    @property
+    def app(self):
+        return self.apps / "Quick Launcher.app"
+
+    def test_install_puts_the_core_plugins_and_app_in_place(self):
+        messages = self.install()
+        self.assertEqual((self.data / "quick-launcher/bin/quick-launcher-core").read_text(), "quick-launcher-core")
+        self.assertTrue((self.data / "quick-launcher/plugins/apps/plugin.toml").is_file())
+        executable = self.app / "Contents/MacOS/QuickLauncher"
+        self.assertEqual(executable.read_text(), "app")
+        self.assertTrue(os.access(executable, os.X_OK))
+        self.assertTrue(any("Option+Space" in message for message in messages))
+
+    def test_the_app_is_a_menu_bar_app_that_opens_its_urls(self):
+        self.install("1.2.3")
+        with open(self.app / "Contents/Info.plist", "rb") as stream:
+            info = plistlib.load(stream)
+        self.assertEqual(info["CFBundleExecutable"], "QuickLauncher")
+        self.assertEqual(info["CFBundleIdentifier"], install.MAC_BUNDLE_ID)
+        self.assertEqual(info["CFBundleShortVersionString"], "1.2.3")
+        self.assertIs(info["LSUIElement"], True)
+        self.assertEqual(info["CFBundleURLTypes"][0]["CFBundleURLSchemes"], ["quick-launcher"])
+
+    def test_a_pre_release_version_becomes_a_valid_bundle_version(self):
+        for version, expected in [("0.2.0-rc1", "0.2.0"), ("1.2.3", "1.2.3"), ("2", "2"), ("dev", "0")]:
+            self.assertEqual(install.info_plist(version)["CFBundleVersion"], expected, version)
+            self.assertEqual(install.info_plist(version)["CFBundleShortVersionString"], expected, version)
+
+    def test_a_failed_swap_puts_the_old_app_back(self):
+        self.install()
+        real_rename = Path.rename
+
+        def rename(path, target):
+            if path.name == "Quick Launcher.app" and path.parent != self.apps:
+                raise OSError("disk full")
+            return real_rename(path, target)
+
+        self.executable.write_text("new app")
+        with mock.patch.object(Path, "rename", rename), self.assertRaises(OSError):
+            self.install()
+        self.assertEqual((self.app / "Contents/MacOS/QuickLauncher").read_text(), "app")
+        self.assertEqual(sorted(path.name for path in self.apps.iterdir()), ["Quick Launcher.app"])
+
+    def test_reinstall_replaces_the_app_whole(self):
+        self.install()
+        (self.app / "Contents/leftover").write_text("old")
+        self.executable.write_text("new app")
+        self.install()
+        self.assertFalse((self.app / "Contents/leftover").exists())
+        self.assertEqual((self.app / "Contents/MacOS/QuickLauncher").read_text(), "new app")
+        self.assertEqual(sorted(path.name for path in self.apps.iterdir()), ["Quick Launcher.app"])
+
+    def test_a_missing_executable_fails_before_the_app_changes(self):
+        self.install()
+        self.executable.unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.install()
+        self.assertEqual((self.app / "Contents/MacOS/QuickLauncher").read_text(), "app")
+
+    def test_uninstall_removes_the_app_core_and_plugins(self):
+        self.install()
+        with mock.patch.object(install.subprocess, "run"):
+            messages = install.uninstall_macos(self.data, self.apps)
+        self.assertFalse(self.app.exists())
+        self.assertFalse((self.data / "quick-launcher").exists())
+        self.assertTrue(any("Login Items" in message for message in messages))
+
+    def test_the_app_builds_with_swiftpm(self):
+        shown = mock.Mock(stdout="/src/frontends/macos/.build/release\n")
+        with mock.patch.object(install.subprocess, "run", return_value=shown) as run, \
+                mock.patch("builtins.print"):
+            executable = install.build_mac_app("swift")
+        package = str(ROOT / "frontends/macos")
+        self.assertEqual(run.call_args_list[0].args[0], ["swift", "build", "-c", "release", "--package-path", package])
+        self.assertEqual(executable, Path("/src/frontends/macos/.build/release/QuickLauncher"))
+
+    def test_the_version_comes_from_the_workspace(self):
+        self.assertRegex(install.workspace_version(), r"^\d+\.\d+\.\d+")
+
+    def test_install_without_swift_says_how_to_get_it(self):
+        with mock.patch.object(install.shutil, "which", return_value=None):
+            with self.assertRaisesRegex(FileNotFoundError, "xcode-select --install"):
+                install.check_swift()
 
 
 if __name__ == "__main__":
