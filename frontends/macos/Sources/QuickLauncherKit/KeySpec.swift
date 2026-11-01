@@ -81,9 +81,10 @@ public enum KeySpec {
 
     /// An action's `key` as this frontend binds it: like ``parse(_:)``,
     /// but `nil` for a key that types, moves or runs the default action
-    /// without Ctrl, Option or Command, so an action can't take it.
+    /// without Ctrl, Option or Command, and for a key the launcher keeps
+    /// for itself, so an action can't take it.
     public static func actionKey(_ spec: String) -> KeyPress? {
-        guard let press = parse(spec) else { return nil }
+        guard let press = parse(spec), !isLaunchers(press) else { return nil }
         if press.modifiers.isDisjoint(with: .chord) {
             switch press.key {
             case .character, .space, .backspace, .tab, .enter: return nil
@@ -91,6 +92,22 @@ public enum KeySpec {
             }
         }
         return press
+    }
+
+    /// The launcher's own keys, which `LauncherController.handleKey` takes
+    /// before an action's: Return and Tab with any modifiers, Ctrl+N/P/J/K,
+    /// and Command+X/C/V/A/Z.
+    static func isLaunchers(_ press: KeyPress) -> Bool {
+        switch (press.key, press.modifiers) {
+        case (.enter, _), (.tab, _):
+            return true
+        case let (.character(char), modifiers) where modifiers == [.control]:
+            return "npjk".contains(char)
+        case let (.character(char), modifiers) where modifiers == [.command]:
+            return "xcvaz".contains(char)
+        default:
+            return false
+        }
     }
 
     /// How the app shows a chord, the macOS way: `⌃⇧D`.

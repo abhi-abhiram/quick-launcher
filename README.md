@@ -106,9 +106,11 @@ app. `python3 install.py --uninstall` removes the app, the core and the
 bundled plugins.
 
 Quick Launcher lives in the menu bar and opens on **Option+Space**
-(Command+Space is Spotlight's). The keys are the same as on Omarchy, and
-right-clicking a row lists all its actions. Its menu has *Open at Login*. To
-use another hotkey:
+(Command+Space is Spotlight's). The keys are the same as on Omarchy, the
+footer shows the selected row's actions and their keys, and right-clicking
+a row lists all its actions. Each bundled mode has its own color, and paths
+read as breadcrumbs (`~ › Projects › quick-launcher`). Its menu has *Open at
+Login*. To use another hotkey:
 
 ```sh
 defaults write io.github.abhi-abhiram.quick-launcher hotkey "ctrl+space"
@@ -120,6 +122,9 @@ open it with a URL, straight into a mode if they like:
 
 What's different on a Mac:
 
+- **Shift+Delete** (removing a project) is ⇧⌦: hold Fn to get ⌦ on a
+  laptop keyboard, where the Delete key alone is Backspace and
+  Shift+Backspace edits the text.
 - **Apps** lists the `.app` bundles in `~/Applications`, `/Applications`
   and `/System/Applications` (and their subfolders), plus Finder.
 - **Terminal** commands, pi and projects open in a new Terminal.app window. To use

@@ -69,7 +69,7 @@ final class ProtocolTests: XCTestCase {
 
 final class LauncherTests: XCTestCase {
     let open = ItemAction(id: "open", title: "Open")
-    let pin = ItemAction(id: "pin", title: "Pin", key: "ctrl+p")
+    let pin = ItemAction(id: "pin", title: "Pin", key: "ctrl+u")
 
     func items(_ refs: String...) -> [Item] {
         refs.map { Item(ref: $0, label: $0, actions: [open, pin]) }
@@ -140,7 +140,7 @@ final class LauncherTests: XCTestCase {
         XCTAssertNil(launcher.activate(index: 0, action: 0), "a disabled item's default can't run")
         XCTAssertEqual(launcher.activate(index: 0, action: 1), .activate(item: "d", action: "pin"))
         XCTAssertEqual(
-            launcher.activate(byKey: KeyPress(.character("p"), .control)), .activate(item: "d", action: "pin"))
+            launcher.activate(byKey: KeyPress(.character("u"), .control)), .activate(item: "d", action: "pin"))
         XCTAssertNil(launcher.activate(byKey: KeyPress(.character("p"))))
         XCTAssertNil(launcher.activate(index: 5, action: 0))
         launcher.move(1)
@@ -157,6 +157,54 @@ final class LauncherTests: XCTestCase {
         XCTAssertEqual(launcher.complete(), .complete(item: "hint"))
     }
 
+    func testTabInAModeTakesTheCompletedText() {
+        let projects = Mode(id: "projects", name: "Projects")
+        var launcher = Launcher()
+        _ = launcher.open()
+        XCTAssertEqual(launcher.setText("cd:~/Pro"), .input(seq: 1, mode: nil, text: "cd:~/Pro"))
+        launcher.receive(CoreState(seq: 1, mode: projects, text: "~/Pro", items: items("Programs/", "Projects/")))
+        launcher.move(1)
+        XCTAssertEqual(launcher.complete(), .complete(item: "Projects/"))
+        // The core answers Tab with the completed text and the last seq.
+        launcher.receive(CoreState(seq: 1, mode: projects, text: "~/Projects/", items: items("ql/", "site/")))
+        XCTAssertEqual(launcher.text, "~/Projects/")
+        XCTAssertEqual(launcher.selected?.ref, "ql/", "the completed text selects the first item")
+        XCTAssertEqual(launcher.setText("~/Projects/q"), .input(seq: 2, mode: "projects", text: "~/Projects/q"))
+    }
+
+    func testALateCompletionDoesNotUndoNewerTyping() {
+        let projects = Mode(id: "projects", name: "Projects")
+        var launcher = Launcher()
+        _ = launcher.open()
+        _ = launcher.setText("cd:~/Pro")
+        launcher.receive(CoreState(seq: 1, mode: projects, text: "~/Pro", items: items("Projects/")))
+        XCTAssertEqual(launcher.complete(), .complete(item: "Projects/"))
+        XCTAssertEqual(launcher.setText("~/Projects/q"), .input(seq: 2, mode: "projects", text: "~/Projects/q"))
+        // The answer to Tab (still seq 1) arrives after the newer input.
+        launcher.receive(CoreState(seq: 1, mode: projects, text: "~/Projects/", items: items("ql/")))
+        XCTAssertEqual(launcher.text, "~/Projects/q", "a late completion can't undo typing")
+        XCTAssertEqual(launcher.items.map(\.ref), ["ql/"], "its items are still drawn")
+    }
+
+    func testShiftDeleteRemovesAProject() {
+        // A saved project's actions, as plugins/projects sends them.
+        let remove = ItemAction(id: "remove", title: "Remove", key: "shift+delete")
+        let project = Item(ref: "p", label: "ql", actions: [ItemAction(id: "open", title: "Open terminal"), remove])
+        var launcher = Launcher()
+        _ = launcher.open()
+        launcher.receive(CoreState(items: [project]))
+        XCTAssertEqual(launcher.activate(byKey: KeyPress(.delete, .shift)), .activate(item: "p", action: "remove"))
+        XCTAssertEqual(
+            Launcher.keyHints(project),
+            [KeyHint(keys: ["↩"], title: "Open terminal"), KeyHint(keys: ["⇧↩", "⇧⌦"], title: "Remove")],
+            "the alternate and its key share a hint")
+        let third = Item(ref: "q", label: "q", actions: [open, ItemAction(id: "x", title: "X"), remove])
+        XCTAssertEqual(
+            Launcher.keyHints(third),
+            [KeyHint(keys: ["↩"], title: "Open"), KeyHint(keys: ["⇧↩"], title: "X"), KeyHint(keys: ["⇧⌦"], title: "Remove")],
+            "a keyed action past the alternate")
+    }
+
     func testPlaceholderEmptyMessageAndHints() {
         var launcher = Launcher()
         XCTAssertEqual(launcher.placeholder, "Apps…")
@@ -165,8 +213,49 @@ final class LauncherTests: XCTestCase {
         XCTAssertEqual(launcher.placeholder, "Open pi in…")
         XCTAssertEqual(launcher.emptyMessage, "No matches for “x”")
         XCTAssertEqual(
-            Launcher.actionHints(Item(ref: "a", label: "a", actions: [open, pin, ItemAction(id: "x", title: "X")])),
-            "⇧↩ / ⌃P Pin")
+            Launcher.keyHints(Item(ref: "a", label: "a", actions: [open, pin, ItemAction(id: "x", title: "X")])),
+            [KeyHint(keys: ["↩"], title: "Open"), KeyHint(keys: ["⇧↩", "⌃U"], title: "Pin")])
+        XCTAssertEqual(
+            Launcher.keyHints(Item(ref: "d", label: "d", disabled: true, actions: [open])), [],
+            "a disabled item's default has no key")
+    }
+
+    func testEscapeClearsThenCloses() {
+        var launcher = Launcher()
+        _ = launcher.open()
+        XCTAssertEqual(launcher.escapeTitle, "Close")
+        _ = launcher.setText("x")
+        XCTAssertEqual(launcher.escapeTitle, "Clear")
+    }
+}
+
+final class StyleTests: XCTestCase {
+    func testModesHaveStableStyles() {
+        XCTAssertEqual(ModeStyle.of(nil), .search)
+        XCTAssertNil(ModeStyle.of(nil).tint, "the plain search uses the accent color")
+        XCTAssertEqual(ModeStyle.of(Mode(id: "projects", name: "Projects")).symbol, "folder.fill")
+        XCTAssertTrue(ModeStyle.of(Mode(id: "terminal", name: "Terminal")).monospaced)
+        let mine = ModeStyle.of(Mode(id: "notes", name: "Notes"))
+        XCTAssertNotNil(mine.tint)
+        XCTAssertEqual(mine, ModeStyle.of(Mode(id: "notes", name: "Other name")), "picked from the id alone")
+    }
+
+    func testPathsSplitIntoBreadcrumbs() {
+        XCTAssertEqual(
+            Breadcrumbs.parse("~/Projects/quick-launcher"), Breadcrumbs(crumbs: ["~", "Projects", "quick-launcher"]))
+        XCTAssertEqual(Breadcrumbs.parse("/System/Applications/"), Breadcrumbs(crumbs: ["System", "Applications"]))
+        XCTAssertEqual(Breadcrumbs.parse("~"), Breadcrumbs(crumbs: ["~"]))
+        XCTAssertNil(Breadcrumbs.parse("/"))
+        XCTAssertNil(Breadcrumbs.parse("pi: · Open pi in a project"))
+        XCTAssertNil(Breadcrumbs.parse("Run in a new terminal"))
+    }
+
+    func testANoteAfterThePathIsKeptApart() {
+        // pi's details (plugins/pi/src/lib.rs).
+        XCTAssertEqual(
+            Breadcrumbs.parse("~/Projects/quick-launcher · last used"),
+            Breadcrumbs(crumbs: ["~", "Projects", "quick-launcher"], note: "last used"))
+        XCTAssertEqual(Breadcrumbs.parse("~/gone · missing"), Breadcrumbs(crumbs: ["~", "gone"], note: "missing"))
     }
 }
 
@@ -188,8 +277,18 @@ final class KeySpecTests: XCTestCase {
         XCTAssertNil(KeySpec.actionKey("space"))
         XCTAssertNil(KeySpec.actionKey("enter"))
         XCTAssertEqual(KeySpec.actionKey("delete"), KeyPress(.delete))
+        XCTAssertEqual(KeySpec.actionKey("shift+delete"), KeyPress(.delete, .shift))
+        XCTAssertNil(KeySpec.actionKey("shift+backspace"), "Shift+Backspace edits the text")
         XCTAssertEqual(KeySpec.actionKey("f2"), KeyPress(.function(2)))
-        XCTAssertEqual(KeySpec.actionKey("ctrl+enter"), KeyPress(.enter, .control))
+        XCTAssertEqual(KeySpec.actionKey("ctrl+f2"), KeyPress(.function(2), .control))
+    }
+
+    func testActionsCantTakeTheLaunchersKeys() {
+        for spec in ["ctrl+enter", "shift+enter", "ctrl+tab", "ctrl+n", "ctrl+k", "cmd+v", "cmd+z"] {
+            XCTAssertNil(KeySpec.actionKey(spec), spec)
+        }
+        XCTAssertEqual(KeySpec.actionKey("ctrl+d"), KeyPress(.character("d"), .control))
+        XCTAssertEqual(KeySpec.actionKey("ctrl+shift+n"), KeyPress(.character("n"), [.control, .shift]))
     }
 
     func testSymbols() {
