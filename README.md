@@ -1,7 +1,8 @@
 # Quick launcher
 
-A keyboard launcher for the Omarchy shell that replaces the apps menu. With
-no prefix it searches applications, just like the stock menu. Typing a mode prefix switches the suggestions to that mode:
+A keyboard launcher for the Omarchy shell that replaces the apps menu, and
+for macOS as a menu bar app (see [macOS](#macos)). With no prefix it searches
+applications, just like the stock menu. Typing a mode prefix switches the suggestions to that mode:
 
 | Prefix           | Mode     | Suggestions                                     | Enter                    | Shift+Enter / right-click     |
 |------------------|----------|-------------------------------------------------|--------------------------|-------------------------------|
@@ -34,9 +35,9 @@ the `.`.
 The launcher is a Rust program, `quick-launcher-core`, plus plugins. The core
 finds the plugins, reads prefixes, filters and ranks every item, and runs the
 action you pick. Each mode is a plugin: `apps`, `pi`, `projects` and `terminal` are
-bundled, and you can add your own. The Omarchy shell plugin
-(`frontends/omarchy/Launcher.qml`) only draws what the core sends and passes
-on what you type. [docs/protocol.md](docs/protocol.md) is the full design.
+bundled, and you can add your own. The frontends, the Omarchy shell plugin
+(`frontends/omarchy/Launcher.qml`) and the macOS app (`frontends/macos/`),
+only draw what the core sends and pass on what you type. [docs/protocol.md](docs/protocol.md) is the full design.
 
 ## Install
 
@@ -84,6 +85,56 @@ A payload such as `'{"mode":"pi"}'` opens the launcher straight into a mode
 
 To uninstall, run `python3 install.py --uninstall` and remove the binding.
 Your pins, history, config and own plugins stay.
+
+## macOS
+
+Requires macOS 13 or later, a Rust toolchain (from
+[rustup](https://rustup.rs)), the Xcode command line tools
+(`xcode-select --install`, for `swift`) and Python 3.
+
+```sh
+git clone https://github.com/abhi-abhiram/quick-launcher.git
+cd quick-launcher
+python3 install.py
+```
+
+On a Mac the installer builds the core and the bundled plugins as on Linux,
+installs them in the same folders (`~/.local/share/quick-launcher/`), builds
+the Quick Launcher app with SwiftPM, puts it in `~/Applications` (change it
+with `--app-dir`) and opens it. Running it again updates and restarts the
+app. `python3 install.py --uninstall` removes the app, the core and the
+bundled plugins.
+
+Quick Launcher lives in the menu bar and opens on **Option+Space**
+(Command+Space is Spotlight's). The keys are the same as on Omarchy, and
+right-clicking a row lists all its actions. Its menu has *Open at Login*. To
+use another hotkey:
+
+```sh
+defaults write io.github.abhi-abhiram.quick-launcher hotkey "ctrl+space"
+```
+
+then quit Quick Launcher from its menu and open it again. Other tools can
+open it with a URL, straight into a mode if they like:
+`open "quick-launcher://open?mode=pi"` (or `quick-launcher://toggle`).
+
+What's different on a Mac:
+
+- **Apps** lists the `.app` bundles in `~/Applications`, `/Applications`
+  and `/System/Applications` (and their subfolders), plus Finder.
+- **Terminal** commands, pi and projects open in a new Terminal.app window. To use
+  another terminal app that opens `.command` files, such as iTerm, run
+  `launchctl setenv QL_TERMINAL_APP iTerm` and restart Quick Launcher.
+  Without a folder of their own they start in your home folder.
+- Plugins with `env = "login"` (pi) run through your login shell
+  (`$SHELL -lc 'exec "$@"'`, zsh unless it's bash, sh, ksh or dash), so
+  `~/.zprofile` settings such as Homebrew's `PATH` apply.
+- The bundled plugins' icons are Nerd Font glyphs. Install one
+  (`brew install --cask font-symbols-only-nerd-font`) to see them; without
+  one they're left blank.
+- Pins, history, config and your own plugins live in the same
+  `~/.config/quick-launcher` and `~/.local/state/quick-launcher` folders as
+  on Linux.
 
 ## Data
 
@@ -159,8 +210,10 @@ python3 tools/check.py
 
 runs everything a PR must pass: `cargo fmt --check`, `cargo clippy` (also
 with the `recording-platform` feature), `cargo test`, the core's end-to-end
-test (`tests/e2e_core.py`) and the installer's tests. The CI workflow runs
-the same checks on every PR and every push to `main`. The shell plugin is
+test (`tests/e2e_core.py`) and the installer's tests. On a Mac it also builds the
+app and runs its tests (`swift test --package-path frontends/macos`). The CI
+workflow runs the same checks on every PR and every push to `main`, on Linux
+and on macOS. The shell plugin is
 checked with:
 
 ```sh

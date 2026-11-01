@@ -8,10 +8,10 @@ The order gets something real running early: by M4 the `apps` plugin lists
 your installed apps, and by M8 the core searches and launches them from a
 terminal. Every milestone after that adds to a binary you can already run.
 
-v0 (`Launcher.qml`, `modes.json`, `modes/*.py`) keeps working on `main`
-until the last milestone. The Rust workspace grows next to it, and the
-Omarchy shell doesn't use it until [M15](#m15--switch-the-omarchy-frontend),
-which is the one-step switch the spec asks for (*Migrating from v0*).
+v0 (`Launcher.qml`, `modes.json`, `modes/*.py`) kept working on `main`
+until [M15](#m15--switch-the-omarchy-frontend), which is the one-step
+switch the spec asks for (*Migrating from v0*). M16 adds the second
+platform and the second frontend, after v1.
 
 ## Overview
 
@@ -32,6 +32,7 @@ which is the one-step switch the spec asks for (*Migrating from v0*).
 | M13 | [`terminal` plugin](#m13--terminal-plugin) | `>` mode, from the terminal | M3 |
 | M14 | [Plugin host: persistent, streaming, cancel](#m14--plugin-host-persistent-streaming-cancel) | `cargo test` | M7, M11 |
 | M15 | [Switch the Omarchy frontend](#m15--switch-the-omarchy-frontend) | **the shell launcher on v1** | M12–M14 |
+| M16 | [macOS frontend and platform](#m16--macos-frontend-and-platform) | **the launcher as a menu bar app on a Mac** | M15 |
 
 "Depends on" lists what a milestone needs to be built and tested. Trying a
 plugin through the core needs more: the core gains modes in M9, hints in
@@ -569,3 +570,55 @@ Branch `feat/omarchy-v1`. One PR, as the spec requires.
 covers apps search and launch, `pi:` with pin and unpin, `>` with run and
 forget, Tab and Backspace mode changes, opening straight into a mode with
 `'{"mode":"pi"}'`, and fast typing of `pi:launch`.
+
+### M16 — macOS frontend and platform
+
+Branch `macos-frontend`. One PR, like M15.
+
+**Goal.** The core, the bundled plugins and a native frontend run on a Mac,
+with the protocol, the plugins and their data unchanged.
+
+**Scope** (*Platform*, *Frontend protocol*, *Repository layout*, *Actions*)
+
+- `platform/macos.rs`: `spawn` starts argv detached in a process group of
+  its own; `terminal` writes a private, self-deleting `.command` script
+  that changes to `cwd` (or home) and `exec`s argv with every argument
+  single-quoted, then opens it with `open -a Terminal` (`QL_TERMINAL_APP`
+  names another app); `launch_app` and `open` go through `open`, `copy`
+  through `pbcopy`; `login_command` is `$SHELL -lc 'exec "$@"'` when
+  `$SHELL` is zsh, bash, sh, ksh or dash, and `/bin/zsh` otherwise. The
+  same XDG-style directories as on Linux, so plugins, config and state are
+  in the same places on both.
+- `platform::Native` picks `Omarchy` or `MacOs` at build time. Both modules
+  compile and are tested on every OS; the shared process helpers and
+  `xdg_dirs` move to `platform/mod.rs`.
+- `apps`: `macos.rs` lists `.app` bundles in `~/Applications`,
+  `/Applications` and `/System/Applications` (two levels deep), plus
+  Finder, named after the bundle's folder, with the bundle path as the item
+  id and `{"path": bundle}` as the icon. The binary picks it on macOS.
+- `frontends/macos`: a SwiftPM package. `QuickLauncherKit` holds the
+  protocol and a `Launcher` state type that ports `Launcher.qml`'s rules
+  (stale state, seq, selection, action keys, hints) and key-chord parsing,
+  with XCTest coverage. `QuickLauncher` is an accessory (menu bar) app with
+  a Carbon global hotkey (Option+Space, set with
+  `defaults write io.github.abhi-abhiram.quick-launcher hotkey …`), a
+  non-activating floating panel, the same keys as the Omarchy frontend, a
+  right-click menu of actions, Open at Login, and `quick-launcher://`
+  URLs that open the panel, straight into a mode if asked.
+- `install.py` on darwin: build the core and the bundled plugins as on
+  Linux, build the app with `swift build`, install
+  `~/Applications/Quick Launcher.app` (an `LSUIElement` Info.plist with
+  the URL scheme, signed ad hoc) and open it; `--uninstall` removes it
+  again. CI gets a `macos` job, and `tools/check.py` builds and tests the
+  app on a Mac.
+- README macOS section; protocol.md's platform table and rules.
+
+**Done when** the Rust, e2e, installer and Swift tests pass on Linux and
+macOS, and a manual check on a Mac covers: Option+Space opening the panel
+with the keyboard already in the search field, typing (including an input
+method), Up/Down, PageUp/PageDown and Ctrl+J/K/N/P, Tab and Backspace
+changing modes, Enter, Shift+Enter and a click running an action,
+right-click listing every action with the panel still open while the menu
+is up, Escape and a click elsewhere closing the session, opening
+`quick-launcher://open?mode=pi`, launching an app from `~/Applications`, a
+terminal command and `pi` opening in Terminal.app, and Open at Login.

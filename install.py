@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Install the quick launcher: build the core and the bundled plugins, then
-install them with the Omarchy shell plugin that draws the launcher."""
+install them with the frontend that draws the launcher: the Omarchy shell
+plugin on Linux, the Quick Launcher menu bar app on macOS."""
 
 import argparse
 from datetime import datetime
 import json
 import os
 from pathlib import Path
+import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -25,6 +28,15 @@ CORE_BIN = "quick-launcher-core"
 # The pi-launcher bar button this launcher replaces.
 LEGACY_WIDGET_ID = "pi-launcher"
 LEGACY_WIDGET_FILES = ("pi-launcher.qml", "pi-launcher-projects.py")
+
+# The macOS app, built with SwiftPM from MAC_FRONTEND.
+MAC_FRONTEND = Path("frontends/macos")
+MAC_APP_NAME = "Quick Launcher.app"
+MAC_EXECUTABLE = "QuickLauncher"
+MAC_BUNDLE_ID = "io.github.abhi-abhiram.quick-launcher"
+MAC_HOTKEY_HINT = f"""Press Option+Space to open the launcher. To use another key, for example:
+  defaults write {MAC_BUNDLE_ID} hotkey "ctrl+space"
+then quit Quick Launcher from its menu bar icon and open it again."""
 
 # Keys are the user's to choose, so the installer only suggests a binding.
 TOGGLE_COMMAND = f"omarchy-shell shell toggle {PLUGIN_ID} '{{}}'"
@@ -282,6 +294,148 @@ def uninstall(config_home: Path, data_home: Path) -> list:
     return messages
 
 
+# ---------------------------------------------------------------- macOS
+
+
+def workspace_version(source: Path = ROOT) -> str:
+    """The workspace version in Cargo.toml, which the app reports too."""
+    text = (source / "Cargo.toml").read_text()
+    match = re.search(r'^\[workspace\.package\][^\[]*?^version\s*=\s*"([^"]+)"', text, re.M | re.S)
+    return match[1] if match else "0.0.0"
+
+
+def check_swift() -> str:
+    swift = shutil.which("swift")
+    if swift is None:
+        raise FileNotFoundError(
+            "swift is not installed. Install the Xcode command line tools "
+            "(`xcode-select --install`), then run install.py again.")
+    return swift
+
+
+def build_mac_app(swift: str, source: Path = ROOT) -> Path:
+    """Build the macOS app's executable in release mode. Returns its path."""
+    package = source / MAC_FRONTEND
+    command = [swift, "build", "-c", "release", "--package-path", str(package)]
+    print(f"Building: {' '.join(command[1:])}", flush=True)
+    subprocess.run(command, check=True)
+    shown = subprocess.run(command + ["--show-bin-path"], check=True, capture_output=True, text=True)
+    return Path(shown.stdout.strip()) / MAC_EXECUTABLE
+
+
+def bundle_version(version: str) -> str:
+    """`version` as a bundle version, which is up to three integers: a
+    pre-release suffix such as `-rc1` is dropped."""
+    match = re.match(r"\d+(\.\d+){0,2}", version)
+    return match[0] if match else "0"
+
+
+def info_plist(version: str) -> dict:
+    """The app's Info.plist: a menu bar app (no Dock icon) that opens
+    quick-launcher:// URLs."""
+    version = bundle_version(version)
+    return {
+        "CFBundleIdentifier": MAC_BUNDLE_ID,
+        "CFBundleName": "Quick Launcher",
+        "CFBundleDisplayName": "Quick Launcher",
+        "CFBundleExecutable": MAC_EXECUTABLE,
+        "CFBundlePackageType": "APPL",
+        "CFBundleShortVersionString": version,
+        "CFBundleVersion": version,
+        "CFBundleInfoDictionaryVersion": "6.0",
+        "LSMinimumSystemVersion": "13.0",
+        "LSUIElement": True,
+        "NSHighResolutionCapable": True,
+        "CFBundleURLTypes": [{
+            "CFBundleURLName": MAC_BUNDLE_ID,
+            "CFBundleURLSchemes": ["quick-launcher"],
+        }],
+    }
+
+
+def mac_app_path(app_dir: Path) -> Path:
+    return app_dir / MAC_APP_NAME
+
+
+def install_mac_app(app_dir: Path, executable: Path, version: str) -> Path:
+    """Lay out the app bundle and swap it in whole. Returns its path."""
+    executable = Path(executable)
+    if not executable.is_file():
+        raise FileNotFoundError(f"{executable} is missing; the build didn't produce it")
+    target = mac_app_path(app_dir)
+    app_dir.mkdir(parents=True, exist_ok=True)
+    staged = Path(tempfile.mkdtemp(dir=app_dir, prefix=".quick-launcher-"))
+    try:
+        bundle = staged / MAC_APP_NAME
+        (bundle / "Contents/MacOS").mkdir(parents=True)
+        shutil.copy2(executable, bundle / "Contents/MacOS" / MAC_EXECUTABLE)
+        os.chmod(bundle / "Contents/MacOS" / MAC_EXECUTABLE, 0o755)
+        with open(bundle / "Contents/Info.plist", "wb") as stream:
+            plistlib.dump(info_plist(version), stream)
+        if target.exists():
+            retired = target.with_name(f".{MAC_APP_NAME}-old-{stamp()}")
+            target.rename(retired)
+            try:
+                bundle.rename(target)
+            except OSError:
+                retired.rename(target)
+                raise
+            shutil.rmtree(retired)
+        else:
+            bundle.rename(target)
+        return target
+    finally:
+        shutil.rmtree(staged, ignore_errors=True)
+
+
+def sign_mac_app(app: Path) -> None:
+    """Sign the bundle ad hoc, which Apple silicon and Open at Login need."""
+    command = ["codesign", "--force", "--sign", "-", str(app)]
+    try:
+        subprocess.run(command, check=True, capture_output=True)
+    except (OSError, subprocess.CalledProcessError) as error:
+        print(f"Could not sign {app}: {error}")
+
+
+def restart_mac_app(app: Path) -> None:
+    """Quit a running copy, so the new one and its core take over, and open
+    the installed one."""
+    subprocess.run(["pkill", "-x", MAC_EXECUTABLE], capture_output=True, check=False)
+    try:
+        subprocess.run(["open", str(app)], capture_output=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError) as error:
+        print(f"Could not open {app}: {error}")
+
+
+def install_macos(data_home: Path, app_dir: Path, bin_dir: Path, executable: Path,
+                  version: str) -> list:
+    """Install from binaries already built: the core and bundled plugins
+    under the data home, as on Linux, and the app in `app_dir`."""
+    messages = []
+    install_core(data_home, bin_dir)
+    messages.append(f"Installed {CORE_BIN} in {core_path(data_home).parent}")
+    messages.append(f"Installed the bundled plugins in {bundled_plugins_dir(data_home)}")
+    app = install_mac_app(app_dir, executable, version)
+    messages.append(f"Installed {app}")
+    messages.append(MAC_HOTKEY_HINT)
+    return messages
+
+
+def uninstall_macos(data_home: Path, app_dir: Path) -> list:
+    messages = []
+    app = mac_app_path(app_dir)
+    if app.exists():
+        subprocess.run(["pkill", "-x", MAC_EXECUTABLE], capture_output=True, check=False)
+        shutil.rmtree(app)
+        messages.append(f"Removed {app}")
+    for path in uninstall_core(data_home):
+        messages.append(f"Removed {path}")
+    # Like the user's config on Linux, the hotkey setting stays.
+    messages.append("If you turned on Open at Login, remove Quick Launcher in System Settings > "
+                    "General > Login Items.")
+    return messages
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -296,13 +450,26 @@ def main():
              "~/.local/share). The launcher always starts the core from $XDG_DATA_HOME, "
              "so set this only to try the installer.",
     )
+    parser.add_argument(
+        "--app-dir", type=Path, default=Path.home() / "Applications",
+        help="macOS only: where Quick Launcher.app goes (default: ~/Applications)",
+    )
     parser.add_argument("--uninstall", action="store_true", help="Remove the launcher")
     parser.add_argument("--no-reload", action="store_true",
-                        help="Don't ask the running shell to reload plugins")
+                        help="Don't ask the running shell to reload plugins, or on macOS, "
+                             "don't open the installed app")
     args = parser.parse_args()
+    mac = sys.platform == "darwin"
     try:
-        if args.uninstall:
+        if args.uninstall and mac:
+            messages = uninstall_macos(args.data_home, args.app_dir)
+        elif args.uninstall:
             messages = uninstall(args.config_home, args.data_home)
+        elif mac:
+            bin_dir = build(check_cargo())
+            executable = build_mac_app(check_swift())
+            messages = install_macos(args.data_home, args.app_dir, bin_dir, executable,
+                                     workspace_version())
         else:
             messages = install(args.config_home, args.data_home, build(check_cargo()))
     except subprocess.CalledProcessError as error:
@@ -310,7 +477,11 @@ def main():
     except (OSError, ValueError, KeyError, TypeError) as error:
         parser.exit(1, f"{'Uninstall' if args.uninstall else 'Install'} failed: {error}\n")
     print("\n".join(messages))
-    if not args.no_reload:
+    if mac and not args.uninstall:
+        sign_mac_app(mac_app_path(args.app_dir))
+        if not args.no_reload:
+            restart_mac_app(mac_app_path(args.app_dir))
+    elif not args.no_reload and not mac:
         reload_desktop()
 
 

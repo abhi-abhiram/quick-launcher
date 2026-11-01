@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run every check a PR must pass: the Rust workspace's, the core's
-end-to-end test and the installer's tests.
+end-to-end test and the installer's tests, and on a Mac the macOS app's
+build and tests.
 
 Run it before pushing. The CI workflow runs the same commands on every
 PR and every push to main.
@@ -23,6 +24,12 @@ CHECKS = [
     # The installer.
     [sys.executable, "-m", "unittest", "discover", "-s", "tests"],
 ]
+
+if sys.platform == "darwin":
+    CHECKS += [
+        ["swift", "build", "-c", "release", "--package-path", "frontends/macos"],
+        ["swift", "test", "--package-path", "frontends/macos"],
+    ]
 
 
 def main():

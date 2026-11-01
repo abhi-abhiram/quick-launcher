@@ -2,13 +2,10 @@
 //! `list` request.
 
 use std::fs;
-use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use quick_launcher_apps::{App, AppIcon, Env, Locale, find_apps};
-use serde_json::{Value, json};
 
 /// A user and a system data dir under a fresh temporary folder, removed on
 /// drop.
@@ -322,8 +319,14 @@ fn apps_are_sorted_by_name_ignoring_case() {
     assert_eq!(names, ["Alacritty", "btop", "zed"]);
 }
 
+// On macOS the binary lists bundles instead; tests/macos.rs checks that.
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn the_binary_answers_a_list_request_with_launch_actions() {
+    use serde_json::{Value, json};
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
     let dirs = Dirs::new("binary");
     entry(
         &dirs.user(),

@@ -1,11 +1,13 @@
 //! The bundled `apps` plugin (*Apps are a plugin* in `docs/protocol.md`):
 //! installed apps, read from desktop entries in the XDG data dirs, each
-//! launched by its desktop entry id through the core's platform.
+//! launched by its desktop entry id through the core's platform. On macOS
+//! it lists `.app` bundles instead ([`macos`]).
 //!
 //! The binary reads its settings from the environment ([`Env::from_process`]).
 //! Tests build an [`Env`] by hand and call [`find_apps`].
 
 mod desktop;
+pub mod macos;
 
 use std::collections::HashSet;
 use std::env;
@@ -78,7 +80,8 @@ impl Env {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct App {
     /// The desktop entry id, such as `firefox.desktop` or
-    /// `org.gnome.Nautilus.desktop`. Also the item id.
+    /// `org.gnome.Nautilus.desktop`; on macOS, the bundle's path. Also the
+    /// item id.
     pub id: String,
     /// `Name`, localized.
     pub name: String,
