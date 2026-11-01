@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // A write to a core that just exited must fail, not end the app.
         signal(SIGPIPE, SIG_IGN)
+        Glyphs.findNerdFont()
         controller = LauncherController(core: CoreProcess(executable: CoreProcess.installedPath()))
         registerHotKey()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)

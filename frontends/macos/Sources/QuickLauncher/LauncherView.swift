@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import QuickLauncherKit
 import SwiftUI
 
@@ -209,9 +210,10 @@ struct DetailText: View {
 struct RowIcon: View {
     let icon: Icon?
     let style: ModeStyle
+    @ObservedObject private var icons = IconStore.shared
 
     var body: some View {
-        if let path = icon?.path, let image = Icons.image(path: path) {
+        if let path = icon?.path, let image = icons.image(path: path) {
             Image(nsImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
@@ -230,7 +232,7 @@ struct SymbolOrGlyph: View {
     let size: CGFloat
 
     var body: some View {
-        if let name = icon?.name, NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil {
+        if let name = icon?.name, Symbols.exists(name) {
             Image(systemName: name).font(.system(size: size, weight: .medium))
         } else if let glyph = icon?.glyph, let font = Glyphs.font(for: glyph, size: size + 2) {
             Text(glyph).font(font)
@@ -291,19 +293,74 @@ struct KeyHintView: View {
 
 /// Images for `path` icons: an app bundle or folder gets its Finder icon,
 /// and an image file is loaded. (``SymbolOrGlyph`` draws `name` icons.)
-enum Icons {
-    private static let cache = NSCache<NSString, NSImage>()
+/// They load off the main thread, never in a view's `body`: the first
+/// Finder icon costs ~13 ms and each new app's ~1 ms. A row draws its tile
+/// until its icon lands. Main thread only, apart from the loading itself.
+final class IconStore: ObservableObject {
+    static let shared = IconStore()
 
-    static func image(path: String) -> NSImage? {
-        let key = path as NSString
-        if let image = cache.object(forKey: key) { return image }
+    private var images: [String: NSImage] = [:]
+    /// Files that weren't there; tried again on the next open.
+    private var missing: Set<String> = []
+    private var loading: Set<String> = []
+    private var changePending = false
+    private let queue = DispatchQueue(label: "quick-launcher.icons", qos: .userInitiated)
+
+    /// The icon for `path` once it's loaded; until then `nil`, and it's
+    /// loading.
+    func image(path: String) -> NSImage? {
+        if let image = images[path] { return image }
+        load([path])
+        return nil
+    }
+
+    /// Starts loading `paths`' icons, such as a state's, before its rows draw.
+    func load<Paths: Sequence>(_ paths: Paths) where Paths.Element == String {
+        for path in paths where images[path] == nil && !missing.contains(path) && !loading.contains(path) {
+            loading.insert(path)
+            queue.async { [weak self] in
+                let image = Self.read(path)
+                DispatchQueue.main.async { self?.loaded(path, image) }
+            }
+        }
+    }
+
+    /// A file that was missing may be there now.
+    func forgetMissing() {
+        missing.removeAll()
+    }
+
+    private func loaded(_ path: String, _ image: NSImage?) {
+        loading.remove(path)
+        if let image { images[path] = image } else { missing.insert(path) }
+        // Icons landing together redraw the rows once.
+        guard !changePending else { return }
+        changePending = true
+        DispatchQueue.main.async { [weak self] in
+            self?.changePending = false
+            self?.objectWillChange.send()
+        }
+    }
+
+    private static func read(_ path: String) -> NSImage? {
         var isFolder: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isFolder) else { return nil }
-        let image = isFolder.boolValue
+        return isFolder.boolValue
             ? NSWorkspace.shared.icon(forFile: path)
             : NSImage(contentsOfFile: path) ?? NSWorkspace.shared.icon(forFile: path)
-        cache.setObject(image, forKey: key)
-        return image
+    }
+}
+
+/// Whether an SF Symbol exists, asked once per name rather than on every
+/// `body` (a first-seen symbol costs a few milliseconds). Main thread only.
+enum Symbols {
+    private static var known: [String: Bool] = [:]
+
+    static func exists(_ name: String) -> Bool {
+        if let exists = known[name] { return exists }
+        let exists = NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil
+        known[name] = exists
+        return exists
     }
 }
 
@@ -311,8 +368,18 @@ enum Icons {
 /// no such font, so they draw with an installed Nerd Font, or not at all
 /// rather than as a box.
 enum Glyphs {
-    private static let nerdFont: String? = NSFontManager.shared.availableFontFamilies
-        .first { $0.contains("Nerd Font") }
+    /// An installed Nerd Font's family. Listing the families takes ~200 ms,
+    /// so ``findNerdFont()`` does it off the main thread at launch; until
+    /// it's done, and without a Nerd Font, rows show SF Symbols instead.
+    private static var nerdFont: String?
+
+    static func findNerdFont() {
+        DispatchQueue.global(qos: .utility).async {
+            let families = CTFontManagerCopyAvailableFontFamilyNames() as? [String] ?? []
+            let found = families.first { $0.contains("Nerd Font") }
+            DispatchQueue.main.async { Glyphs.nerdFont = found }
+        }
+    }
 
     static func font(for glyph: String, size: CGFloat) -> Font? {
         let privateUse = glyph.unicodeScalars.contains { scalar in

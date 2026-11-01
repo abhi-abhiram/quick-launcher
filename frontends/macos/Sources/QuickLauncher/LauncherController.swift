@@ -38,7 +38,13 @@ final class LauncherPanel: NSPanel {
 /// Owns the panel and the core, and turns what the user does into frontend
 /// protocol messages through ``Launcher``.
 final class LauncherController: NSObject, ObservableObject, NSWindowDelegate {
-    @Published private(set) var launcher = Launcher()
+    /// Every change redraws the view, except typing (``setText(_:)``): the
+    /// field already shows the text, and the core's state follows within a
+    /// millisecond, so publishing it too would draw everything twice.
+    private(set) var launcher = Launcher() {
+        willSet { if !typing { objectWillChange.send() } }
+    }
+    private var typing = false
     /// Bumped on every open, so the search field takes the focus again.
     @Published private(set) var focusToken = 0
 
@@ -54,6 +60,7 @@ final class LauncherController: NSObject, ObservableObject, NSWindowDelegate {
     /// A menu (a row's right-click menu, say) is open. It may take the key
     /// status from the panel, which then isn't a click elsewhere.
     private var menuTracking = false
+    private var resizeScheduled = false
 
     init(core: CoreProcess) {
         self.core = core
@@ -127,6 +134,7 @@ final class LauncherController: NSObject, ObservableObject, NSWindowDelegate {
         if panel.isVisible, let close = launcher.close() {
             core.send(close)
         }
+        IconStore.shared.forgetMissing()
         core.send(launcher.open(mode: mode))
         lastPointer = NSEvent.mouseLocation
         place()
@@ -171,14 +179,30 @@ final class LauncherController: NSObject, ObservableObject, NSWindowDelegate {
             display: true)
     }
 
-    /// Fits the panel to the rows, keeping its top edge where it is.
+    /// Fits the panel to the rows once the states that arrived together
+    /// are drawn: one resize for a burst of them, and none while typing
+    /// keeps the height.
+    private func scheduleResize() {
+        guard !resizeScheduled else { return }
+        resizeScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.resizeScheduled = false
+            if self.panel.isVisible { self.resize() }
+        }
+    }
+
+    /// Fits the panel to the rows, keeping its top edge where it is. The
+    /// window draws on its next display pass rather than at once, which
+    /// would make the blurred background sample the desktop again
+    /// mid-keystroke.
     private func resize() {
         let height = Layout.height(rows: launcher.items.count, hasError: launcher.error != nil)
         var frame = panel.frame
         guard frame.height != height else { return }
         frame.origin.y = frame.maxY - height
         frame.size.height = height
-        panel.setFrame(frame, display: true)
+        panel.setFrame(frame, display: false)
     }
 
     // MARK: - The core
@@ -200,8 +224,9 @@ final class LauncherController: NSObject, ObservableObject, NSWindowDelegate {
                         + "\(protocolVersion). Run install.py again to install matching versions.")
             }
         case let .state(state):
+            IconStore.shared.load(state.items.compactMap { $0.icon?.path })
             launcher.receive(state)
-            if panel.isVisible { resize() }
+            if panel.isVisible { scheduleResize() }
         case .done:
             launcher.sessionEnded()
             dismiss()
@@ -225,7 +250,10 @@ final class LauncherController: NSObject, ObservableObject, NSWindowDelegate {
     // MARK: - Input
 
     func setText(_ text: String) {
-        core.send(launcher.setText(text))
+        typing = true
+        let input = launcher.setText(text)
+        typing = false
+        core.send(input)
     }
 
     func activate(_ index: Int, action: Int) {
