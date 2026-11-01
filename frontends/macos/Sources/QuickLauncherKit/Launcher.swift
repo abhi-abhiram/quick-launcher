@@ -154,18 +154,26 @@ public struct Launcher: Equatable {
         return query.isEmpty ? "Nothing here yet" : "No matches for “\(query)”"
     }
 
-    /// What the selected row shows on its right: its alternate action, then
-    /// any action with a key, so every way to reach an action is visible.
-    public static func actionHints(_ item: Item) -> String {
-        var hints: [String] = []
-        for (index, action) in item.actions.enumerated() where index > 0 {
+    /// The keys the footer shows for the selected item: Return for its
+    /// default (unless it's disabled), Shift+Return for its alternate, and
+    /// each action's own `key` where this frontend binds it, so every way to
+    /// reach an action is visible.
+    public static func keyHints(_ item: Item) -> [KeyHint] {
+        var hints: [KeyHint] = []
+        for (index, action) in item.actions.enumerated() {
             var keys: [String] = []
+            if index == 0 && !item.disabled { keys.append("↩") }
             if index == 1 { keys.append("⇧↩") }
-            if let key = action.key {
-                keys.append(KeySpec.parse(key).map(KeySpec.symbols) ?? key)
+            if let press = action.key.flatMap(KeySpec.actionKey) {
+                keys.append(KeySpec.symbols(press))
             }
-            if !keys.isEmpty { hints.append(keys.joined(separator: " / ") + " " + action.title) }
+            if !keys.isEmpty { hints.append(KeyHint(keys: keys, title: action.title)) }
         }
-        return hints.joined(separator: "   ")
+        return hints
+    }
+
+    /// What Escape does now: it clears the text, then closes.
+    public var escapeTitle: String {
+        text.isEmpty ? "Close" : "Clear"
     }
 }

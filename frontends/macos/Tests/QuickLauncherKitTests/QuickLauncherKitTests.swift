@@ -194,9 +194,15 @@ final class LauncherTests: XCTestCase {
         _ = launcher.open()
         launcher.receive(CoreState(items: [project]))
         XCTAssertEqual(launcher.activate(byKey: KeyPress(.delete, .shift)), .activate(item: "p", action: "remove"))
-        XCTAssertEqual(Launcher.actionHints(project), "⇧↩ / ⇧⌦ Remove", "the alternate and its key share a hint")
+        XCTAssertEqual(
+            Launcher.keyHints(project),
+            [KeyHint(keys: ["↩"], title: "Open terminal"), KeyHint(keys: ["⇧↩", "⇧⌦"], title: "Remove")],
+            "the alternate and its key share a hint")
         let third = Item(ref: "q", label: "q", actions: [open, ItemAction(id: "x", title: "X"), remove])
-        XCTAssertEqual(Launcher.actionHints(third), "⇧↩ X   ⇧⌦ Remove", "a keyed action past the alternate")
+        XCTAssertEqual(
+            Launcher.keyHints(third),
+            [KeyHint(keys: ["↩"], title: "Open"), KeyHint(keys: ["⇧↩"], title: "X"), KeyHint(keys: ["⇧⌦"], title: "Remove")],
+            "a keyed action past the alternate")
     }
 
     func testPlaceholderEmptyMessageAndHints() {
@@ -207,8 +213,40 @@ final class LauncherTests: XCTestCase {
         XCTAssertEqual(launcher.placeholder, "Open pi in…")
         XCTAssertEqual(launcher.emptyMessage, "No matches for “x”")
         XCTAssertEqual(
-            Launcher.actionHints(Item(ref: "a", label: "a", actions: [open, pin, ItemAction(id: "x", title: "X")])),
-            "⇧↩ / ⌃P Pin")
+            Launcher.keyHints(Item(ref: "a", label: "a", actions: [open, pin, ItemAction(id: "x", title: "X")])),
+            [KeyHint(keys: ["↩"], title: "Open"), KeyHint(keys: ["⇧↩", "⌃P"], title: "Pin")])
+        XCTAssertEqual(
+            Launcher.keyHints(Item(ref: "d", label: "d", disabled: true, actions: [open])), [],
+            "a disabled item's default has no key")
+    }
+
+    func testEscapeClearsThenCloses() {
+        var launcher = Launcher()
+        _ = launcher.open()
+        XCTAssertEqual(launcher.escapeTitle, "Close")
+        _ = launcher.setText("x")
+        XCTAssertEqual(launcher.escapeTitle, "Clear")
+    }
+}
+
+final class StyleTests: XCTestCase {
+    func testModesHaveStableStyles() {
+        XCTAssertEqual(ModeStyle.of(nil), .search)
+        XCTAssertNil(ModeStyle.of(nil).tint, "the plain search uses the accent color")
+        XCTAssertEqual(ModeStyle.of(Mode(id: "projects", name: "Projects")).symbol, "folder.fill")
+        XCTAssertTrue(ModeStyle.of(Mode(id: "terminal", name: "Terminal")).monospaced)
+        let mine = ModeStyle.of(Mode(id: "notes", name: "Notes"))
+        XCTAssertNotNil(mine.tint)
+        XCTAssertEqual(mine, ModeStyle.of(Mode(id: "notes", name: "Other name")), "picked from the id alone")
+    }
+
+    func testPathsSplitIntoBreadcrumbs() {
+        XCTAssertEqual(Breadcrumbs.split("~/Projects/quick-launcher"), ["~", "Projects", "quick-launcher"])
+        XCTAssertEqual(Breadcrumbs.split("/System/Applications/"), ["System", "Applications"])
+        XCTAssertEqual(Breadcrumbs.split("~"), ["~"])
+        XCTAssertNil(Breadcrumbs.split("/"))
+        XCTAssertNil(Breadcrumbs.split("pi: · Open pi in a project"))
+        XCTAssertNil(Breadcrumbs.split("Run in a new terminal"))
     }
 }
 

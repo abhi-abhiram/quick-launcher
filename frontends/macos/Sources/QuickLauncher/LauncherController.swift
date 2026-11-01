@@ -7,13 +7,14 @@ import SwiftUI
 /// rows rather than measuring the view.
 enum Layout {
     static let width: CGFloat = 640
-    static let padding: CGFloat = 10
-    static let header: CGFloat = 44
-    static let spacing: CGFloat = 6
-    static let errorHeight: CGFloat = 18
+    static let header: CGFloat = 54
+    static let hairline: CGFloat = 1
+    static let errorHeight: CGFloat = 22
+    static let listPadding: CGFloat = 6
     static let rowHeight: CGFloat = 46
     static let rowSpacing: CGFloat = 2
     static let maxVisibleRows = 8
+    static let footer: CGFloat = 32
     static let cornerRadius: CGFloat = 14
 
     static func listHeight(rows: Int) -> CGFloat {
@@ -23,7 +24,7 @@ enum Layout {
     }
 
     static func height(rows: Int, hasError: Bool) -> CGFloat {
-        padding * 2 + header + spacing + (hasError ? errorHeight + spacing : 0) + listHeight(rows: rows)
+        header + hairline + (hasError ? errorHeight : 0) + listPadding * 2 + listHeight(rows: rows) + footer
     }
 }
 

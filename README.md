@@ -106,8 +106,10 @@ app. `python3 install.py --uninstall` removes the app, the core and the
 bundled plugins.
 
 Quick Launcher lives in the menu bar and opens on **Option+Space**
-(Command+Space is Spotlight's). The keys are the same as on Omarchy, and
-right-clicking a row lists all its actions. Its menu has *Open at Login*. To
+(Command+Space is Spotlight's). The keys are the same as on Omarchy, the
+footer shows the selected row's actions and their keys, and right-clicking a
+row lists all its actions. Each bundled mode has its own color, and paths read
+as breadcrumbs (`~ › Projects › quick-launcher`). Its menu has *Open at Login*. To
 use another hotkey:
 
 ```sh
