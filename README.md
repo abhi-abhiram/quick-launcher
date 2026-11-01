@@ -120,8 +120,9 @@ open it with a URL, straight into a mode if they like:
 
 What's different on a Mac:
 
-- **Shift+Delete** (removing a project) is ⇧⌦, which is Fn+Shift+Delete
-  on a laptop keyboard: Shift+Delete on its own edits the text.
+- **Shift+Delete** (removing a project) is ⇧⌦: hold Fn to get ⌦ on a
+  laptop keyboard, where the Delete key alone is Backspace and
+  Shift+Backspace edits the text.
 - **Apps** lists the `.app` bundles in `~/Applications`, `/Applications`
   and `/System/Applications` (and their subfolders), plus Finder.
 - **Terminal** commands, pi and projects open in a new Terminal.app window. To use

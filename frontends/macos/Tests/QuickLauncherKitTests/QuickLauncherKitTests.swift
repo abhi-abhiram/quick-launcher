@@ -172,15 +172,31 @@ final class LauncherTests: XCTestCase {
         XCTAssertEqual(launcher.setText("~/Projects/q"), .input(seq: 2, mode: "projects", text: "~/Projects/q"))
     }
 
+    func testALateCompletionDoesNotUndoNewerTyping() {
+        let projects = Mode(id: "projects", name: "Projects")
+        var launcher = Launcher()
+        _ = launcher.open()
+        _ = launcher.setText("cd:~/Pro")
+        launcher.receive(CoreState(seq: 1, mode: projects, text: "~/Pro", items: items("Projects/")))
+        XCTAssertEqual(launcher.complete(), .complete(item: "Projects/"))
+        XCTAssertEqual(launcher.setText("~/Projects/q"), .input(seq: 2, mode: "projects", text: "~/Projects/q"))
+        // The answer to Tab (still seq 1) arrives after the newer input.
+        launcher.receive(CoreState(seq: 1, mode: projects, text: "~/Projects/", items: items("ql/")))
+        XCTAssertEqual(launcher.text, "~/Projects/q", "a late completion can't undo typing")
+        XCTAssertEqual(launcher.items.map(\.ref), ["ql/"], "its items are still drawn")
+    }
+
     func testShiftDeleteRemovesAProject() {
+        // A saved project's actions, as plugins/projects sends them.
         let remove = ItemAction(id: "remove", title: "Remove", key: "shift+delete")
-        let project = Item(ref: "p", label: "ql", actions: [open, ItemAction(id: "x", title: "X"), remove])
+        let project = Item(ref: "p", label: "ql", actions: [ItemAction(id: "open", title: "Open terminal"), remove])
         var launcher = Launcher()
         _ = launcher.open()
         launcher.receive(CoreState(items: [project]))
         XCTAssertEqual(launcher.activate(byKey: KeyPress(.delete, .shift)), .activate(item: "p", action: "remove"))
-        XCTAssertNil(launcher.activate(byKey: KeyPress(.backspace, .shift)), "Shift+Backspace edits the text")
-        XCTAssertEqual(Launcher.actionHints(project), "⇧↩ X   ⇧⌦ Remove")
+        XCTAssertEqual(Launcher.actionHints(project), "⇧↩ / ⇧⌦ Remove", "the alternate and its key share a hint")
+        let third = Item(ref: "q", label: "q", actions: [open, ItemAction(id: "x", title: "X"), remove])
+        XCTAssertEqual(Launcher.actionHints(third), "⇧↩ X   ⇧⌦ Remove", "a keyed action past the alternate")
     }
 
     func testPlaceholderEmptyMessageAndHints() {
@@ -214,6 +230,8 @@ final class KeySpecTests: XCTestCase {
         XCTAssertNil(KeySpec.actionKey("space"))
         XCTAssertNil(KeySpec.actionKey("enter"))
         XCTAssertEqual(KeySpec.actionKey("delete"), KeyPress(.delete))
+        XCTAssertEqual(KeySpec.actionKey("shift+delete"), KeyPress(.delete, .shift))
+        XCTAssertNil(KeySpec.actionKey("shift+backspace"), "Shift+Backspace edits the text")
         XCTAssertEqual(KeySpec.actionKey("f2"), KeyPress(.function(2)))
         XCTAssertEqual(KeySpec.actionKey("ctrl+enter"), KeyPress(.enter, .control))
     }
