@@ -157,6 +157,32 @@ final class LauncherTests: XCTestCase {
         XCTAssertEqual(launcher.complete(), .complete(item: "hint"))
     }
 
+    func testTabInAModeTakesTheCompletedText() {
+        let projects = Mode(id: "projects", name: "Projects")
+        var launcher = Launcher()
+        _ = launcher.open()
+        XCTAssertEqual(launcher.setText("cd:~/Pro"), .input(seq: 1, mode: nil, text: "cd:~/Pro"))
+        launcher.receive(CoreState(seq: 1, mode: projects, text: "~/Pro", items: items("Programs/", "Projects/")))
+        launcher.move(1)
+        XCTAssertEqual(launcher.complete(), .complete(item: "Projects/"))
+        // The core answers Tab with the completed text and the last seq.
+        launcher.receive(CoreState(seq: 1, mode: projects, text: "~/Projects/", items: items("ql/", "site/")))
+        XCTAssertEqual(launcher.text, "~/Projects/")
+        XCTAssertEqual(launcher.selected?.ref, "ql/", "the completed text selects the first item")
+        XCTAssertEqual(launcher.setText("~/Projects/q"), .input(seq: 2, mode: "projects", text: "~/Projects/q"))
+    }
+
+    func testShiftDeleteRemovesAProject() {
+        let remove = ItemAction(id: "remove", title: "Remove", key: "shift+delete")
+        let project = Item(ref: "p", label: "ql", actions: [open, ItemAction(id: "x", title: "X"), remove])
+        var launcher = Launcher()
+        _ = launcher.open()
+        launcher.receive(CoreState(items: [project]))
+        XCTAssertEqual(launcher.activate(byKey: KeyPress(.delete, .shift)), .activate(item: "p", action: "remove"))
+        XCTAssertNil(launcher.activate(byKey: KeyPress(.backspace, .shift)), "Shift+Backspace edits the text")
+        XCTAssertEqual(Launcher.actionHints(project), "⇧↩ X   ⇧⌦ Remove")
+    }
+
     func testPlaceholderEmptyMessageAndHints() {
         var launcher = Launcher()
         XCTAssertEqual(launcher.placeholder, "Apps…")

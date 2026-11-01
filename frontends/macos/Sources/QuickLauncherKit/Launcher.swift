@@ -76,7 +76,10 @@ public struct Launcher: Equatable {
     }
 
     /// Tab: the selected row's mode when it's a mode hint, or the first
-    /// hint's. The core decides which rows are hints.
+    /// hint's; in a mode, the selected row's completion, or the first
+    /// row's. The core decides which rows are hints and completions, and
+    /// sends the new text in a state carrying the last `seq`, which
+    /// ``receive(_:)`` takes as current.
     public mutating func complete() -> Outgoing {
         resetSelection = true
         return .complete(item: selected?.ref)
