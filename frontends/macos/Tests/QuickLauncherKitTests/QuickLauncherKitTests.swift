@@ -69,7 +69,7 @@ final class ProtocolTests: XCTestCase {
 
 final class LauncherTests: XCTestCase {
     let open = ItemAction(id: "open", title: "Open")
-    let pin = ItemAction(id: "pin", title: "Pin", key: "ctrl+p")
+    let pin = ItemAction(id: "pin", title: "Pin", key: "ctrl+u")
 
     func items(_ refs: String...) -> [Item] {
         refs.map { Item(ref: $0, label: $0, actions: [open, pin]) }
@@ -140,7 +140,7 @@ final class LauncherTests: XCTestCase {
         XCTAssertNil(launcher.activate(index: 0, action: 0), "a disabled item's default can't run")
         XCTAssertEqual(launcher.activate(index: 0, action: 1), .activate(item: "d", action: "pin"))
         XCTAssertEqual(
-            launcher.activate(byKey: KeyPress(.character("p"), .control)), .activate(item: "d", action: "pin"))
+            launcher.activate(byKey: KeyPress(.character("u"), .control)), .activate(item: "d", action: "pin"))
         XCTAssertNil(launcher.activate(byKey: KeyPress(.character("p"))))
         XCTAssertNil(launcher.activate(index: 5, action: 0))
         launcher.move(1)
@@ -214,7 +214,7 @@ final class LauncherTests: XCTestCase {
         XCTAssertEqual(launcher.emptyMessage, "No matches for “x”")
         XCTAssertEqual(
             Launcher.keyHints(Item(ref: "a", label: "a", actions: [open, pin, ItemAction(id: "x", title: "X")])),
-            [KeyHint(keys: ["↩"], title: "Open"), KeyHint(keys: ["⇧↩", "⌃P"], title: "Pin")])
+            [KeyHint(keys: ["↩"], title: "Open"), KeyHint(keys: ["⇧↩", "⌃U"], title: "Pin")])
         XCTAssertEqual(
             Launcher.keyHints(Item(ref: "d", label: "d", disabled: true, actions: [open])), [],
             "a disabled item's default has no key")
@@ -241,12 +241,21 @@ final class StyleTests: XCTestCase {
     }
 
     func testPathsSplitIntoBreadcrumbs() {
-        XCTAssertEqual(Breadcrumbs.split("~/Projects/quick-launcher"), ["~", "Projects", "quick-launcher"])
-        XCTAssertEqual(Breadcrumbs.split("/System/Applications/"), ["System", "Applications"])
-        XCTAssertEqual(Breadcrumbs.split("~"), ["~"])
-        XCTAssertNil(Breadcrumbs.split("/"))
-        XCTAssertNil(Breadcrumbs.split("pi: · Open pi in a project"))
-        XCTAssertNil(Breadcrumbs.split("Run in a new terminal"))
+        XCTAssertEqual(
+            Breadcrumbs.parse("~/Projects/quick-launcher"), Breadcrumbs(crumbs: ["~", "Projects", "quick-launcher"]))
+        XCTAssertEqual(Breadcrumbs.parse("/System/Applications/"), Breadcrumbs(crumbs: ["System", "Applications"]))
+        XCTAssertEqual(Breadcrumbs.parse("~"), Breadcrumbs(crumbs: ["~"]))
+        XCTAssertNil(Breadcrumbs.parse("/"))
+        XCTAssertNil(Breadcrumbs.parse("pi: · Open pi in a project"))
+        XCTAssertNil(Breadcrumbs.parse("Run in a new terminal"))
+    }
+
+    func testANoteAfterThePathIsKeptApart() {
+        // pi's details (plugins/pi/src/lib.rs).
+        XCTAssertEqual(
+            Breadcrumbs.parse("~/Projects/quick-launcher · last used"),
+            Breadcrumbs(crumbs: ["~", "Projects", "quick-launcher"], note: "last used"))
+        XCTAssertEqual(Breadcrumbs.parse("~/gone · missing"), Breadcrumbs(crumbs: ["~", "gone"], note: "missing"))
     }
 }
 
@@ -271,7 +280,15 @@ final class KeySpecTests: XCTestCase {
         XCTAssertEqual(KeySpec.actionKey("shift+delete"), KeyPress(.delete, .shift))
         XCTAssertNil(KeySpec.actionKey("shift+backspace"), "Shift+Backspace edits the text")
         XCTAssertEqual(KeySpec.actionKey("f2"), KeyPress(.function(2)))
-        XCTAssertEqual(KeySpec.actionKey("ctrl+enter"), KeyPress(.enter, .control))
+        XCTAssertEqual(KeySpec.actionKey("ctrl+f2"), KeyPress(.function(2), .control))
+    }
+
+    func testActionsCantTakeTheLaunchersKeys() {
+        for spec in ["ctrl+enter", "shift+enter", "ctrl+tab", "ctrl+n", "ctrl+k", "cmd+v", "cmd+z"] {
+            XCTAssertNil(KeySpec.actionKey(spec), spec)
+        }
+        XCTAssertEqual(KeySpec.actionKey("ctrl+d"), KeyPress(.character("d"), .control))
+        XCTAssertEqual(KeySpec.actionKey("ctrl+shift+n"), KeyPress(.character("n"), [.control, .shift]))
     }
 
     func testSymbols() {

@@ -54,10 +54,10 @@ struct LauncherView: View {
     }
 }
 
-/// The 1pt line under the header and over the footer.
+/// The line under the header and over the footer.
 struct Hairline: View {
     var body: some View {
-        Rectangle().fill(Color.primary.opacity(0.08)).frame(height: 1)
+        Rectangle().fill(Color.primary.opacity(0.08)).frame(height: Layout.hairline)
     }
 }
 
@@ -186,15 +186,17 @@ struct Row: View {
     }
 }
 
-/// A detail that's a path reads as breadcrumbs, its last folder in bold:
-/// `~ › Projects › quick-launcher`. Any other detail is drawn as it is.
+/// A detail that's a path reads as breadcrumbs, its last folder in bold,
+/// then any note: `~ › Projects › quick-launcher · last used`. Any other
+/// detail is drawn as it is.
 struct DetailText: View {
     let detail: String
 
     var body: some View {
-        if let parts = Breadcrumbs.split(detail), let last = parts.last, parts.count > 1 {
-            Text(parts.dropLast().joined(separator: " › ") + " › ")
+        if let path = Breadcrumbs.parse(detail), let last = path.crumbs.last, path.crumbs.count > 1 {
+            Text(path.crumbs.dropLast().joined(separator: " › ") + " › ")
                 + Text(last).fontWeight(.semibold).foregroundColor(Color.primary.opacity(0.85))
+                + Text(path.note.map { " · \($0)" } ?? "")
         } else {
             Text(detail)
         }
@@ -209,7 +211,7 @@ struct RowIcon: View {
     let style: ModeStyle
 
     var body: some View {
-        if icon?.path != nil, let image = Icons.image(for: icon) {
+        if let path = icon?.path, let image = Icons.image(path: path) {
             Image(nsImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
@@ -238,29 +240,23 @@ struct SymbolOrGlyph: View {
     }
 }
 
-/// The bottom bar: the mode on the left, and on the right the selected
-/// row's actions with their keys, then what Escape does.
+/// The bottom bar: the selected row's actions with their keys, then what
+/// Escape does. The mode is in the header's chip, so it isn't repeated. A
+/// long title truncates; the keys never do.
 struct Footer: View {
     let launcher: Launcher
     let style: ModeStyle
 
     var body: some View {
         HStack(spacing: 14) {
-            HStack(spacing: 7) {
-                if launcher.mode == nil {
-                    Image(systemName: style.symbol).font(.system(size: 11, weight: .medium))
-                } else {
-                    Circle().fill(style.color).frame(width: 8, height: 8)
-                }
-                Text(launcher.mode?.name ?? "Apps").lineLimit(1)
-            }
-            Spacer(minLength: 8)
+            Spacer(minLength: 0)
             if let item = launcher.selected {
                 ForEach(Array(Launcher.keyHints(item).enumerated()), id: \.offset) { _, hint in
                     KeyHintView(hint: hint)
                 }
             }
             KeyHintView(hint: KeyHint(keys: ["⎋"], title: launcher.escapeTitle))
+                .layoutPriority(1)
         }
         .font(.system(size: 12))
         .foregroundStyle(.secondary)
@@ -277,7 +273,7 @@ struct KeyHintView: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(hint.title).lineLimit(1)
+            Text(hint.title).lineLimit(1).truncationMode(.tail)
             HStack(spacing: 3) {
                 ForEach(hint.keys, id: \.self) { key in
                     Text(key)
@@ -288,31 +284,26 @@ struct KeyHintView: View {
                         .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Color.primary.opacity(0.1)))
                 }
             }
+            .fixedSize()
         }
     }
 }
 
-/// Images for `path` and `name` icons: an app bundle or folder gets its
-/// Finder icon, an image file is loaded, and a name is tried as an SF Symbol.
+/// Images for `path` icons: an app bundle or folder gets its Finder icon,
+/// and an image file is loaded. (``SymbolOrGlyph`` draws `name` icons.)
 enum Icons {
     private static let cache = NSCache<NSString, NSImage>()
 
-    static func image(for icon: Icon?) -> NSImage? {
-        if let path = icon?.path {
-            let key = "path:\(path)" as NSString
-            if let image = cache.object(forKey: key) { return image }
-            var isFolder: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: path, isDirectory: &isFolder) else { return nil }
-            let image = isFolder.boolValue
-                ? NSWorkspace.shared.icon(forFile: path)
-                : NSImage(contentsOfFile: path) ?? NSWorkspace.shared.icon(forFile: path)
-            cache.setObject(image, forKey: key)
-            return image
-        }
-        if let name = icon?.name {
-            return NSImage(systemSymbolName: name, accessibilityDescription: nil)
-        }
-        return nil
+    static func image(path: String) -> NSImage? {
+        let key = path as NSString
+        if let image = cache.object(forKey: key) { return image }
+        var isFolder: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isFolder) else { return nil }
+        let image = isFolder.boolValue
+            ? NSWorkspace.shared.icon(forFile: path)
+            : NSImage(contentsOfFile: path) ?? NSWorkspace.shared.icon(forFile: path)
+        cache.setObject(image, forKey: key)
+        return image
     }
 }
 
@@ -379,6 +370,11 @@ struct SearchField: NSViewRepresentable {
             ? .monospacedSystemFont(ofSize: 20, weight: .regular)
             : .systemFont(ofSize: 22)
         if field.font != font { field.font = font }
+        // The field editor keeps its own font while the field is focused,
+        // and entering a mode doesn't refocus it.
+        if let editor = field.currentEditor() as? NSTextView, editor.font != font {
+            editor.font = font
+        }
         if field.stringValue != text {
             field.stringValue = text
             field.currentEditor()?.selectedRange = NSRange(location: (text as NSString).length, length: 0)

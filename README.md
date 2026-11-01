@@ -107,10 +107,10 @@ bundled plugins.
 
 Quick Launcher lives in the menu bar and opens on **Option+Space**
 (Command+Space is Spotlight's). The keys are the same as on Omarchy, the
-footer shows the selected row's actions and their keys, and right-clicking a
-row lists all its actions. Each bundled mode has its own color, and paths read
-as breadcrumbs (`~ › Projects › quick-launcher`). Its menu has *Open at Login*. To
-use another hotkey:
+footer shows the selected row's actions and their keys, and right-clicking
+a row lists all its actions. Each bundled mode has its own color, and paths
+read as breadcrumbs (`~ › Projects › quick-launcher`). Its menu has *Open at
+Login*. To use another hotkey:
 
 ```sh
 defaults write io.github.abhi-abhiram.quick-launcher hotkey "ctrl+space"

@@ -39,14 +39,31 @@ public struct ModeStyle: Equatable {
     }
 }
 
-/// A row's detail as a path's folders, for drawing as breadcrumbs:
-/// `~/Projects/ql` is `["~", "Projects", "ql"]`, and `/System/Applications`
-/// is `["System", "Applications"]`. `nil` for a detail that isn't a path.
-public enum Breadcrumbs {
-    public static func split(_ detail: String) -> [String]? {
-        guard detail.hasPrefix("~") || detail.hasPrefix("/") else { return nil }
-        let parts = detail.split(separator: "/").map(String.init)
-        return parts.isEmpty ? nil : parts
+/// A row's detail that's a path, for drawing as breadcrumbs: its folders,
+/// and the note a plugin may add after ` · ` (pi's `· last used`).
+/// `~/Projects/ql · last used` is `["~", "Projects", "ql"]` and
+/// `last used`; `/System/Applications` is `["System", "Applications"]`.
+public struct Breadcrumbs: Equatable {
+    public var crumbs: [String]
+    public var note: String?
+
+    public init(crumbs: [String], note: String? = nil) {
+        self.crumbs = crumbs
+        self.note = note
+    }
+
+    /// `nil` for a detail that isn't a path. The path ends at the first
+    /// ` · `, so a folder named with one reads as the start of a note.
+    public static func parse(_ detail: String) -> Breadcrumbs? {
+        var path = Substring(detail)
+        var note: String?
+        if let range = detail.range(of: " · ") {
+            path = detail[..<range.lowerBound]
+            note = String(detail[range.upperBound...])
+        }
+        guard path.hasPrefix("~") || path.hasPrefix("/") else { return nil }
+        let crumbs = path.split(separator: "/").map(String.init)
+        return crumbs.isEmpty ? nil : Breadcrumbs(crumbs: crumbs, note: note)
     }
 }
 
