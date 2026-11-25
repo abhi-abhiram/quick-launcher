@@ -26,16 +26,18 @@ use quick_launcher_wire::{ActivateParams, Item, Method, QueryParams, Request};
 fn fixture_bins() -> &'static Path {
     static BINS: OnceLock<PathBuf> = OnceLock::new();
     BINS.get_or_init(|| {
-        // This test runs from <target>/<profile>/deps/.
-        let exe = env::current_exe().unwrap();
-        let profile_dir = exe.parent().unwrap().parent().unwrap().to_path_buf();
-        let target_dir = profile_dir.parent().unwrap();
+        // Built into the workspace's target dir, the parent of Cargo's
+        // `<target>/tmp`. Where this test binary itself lives depends on the
+        // Cargo version, so it can't be used to find the target dir.
+        let target_dir = Path::new(env!("CARGO_TARGET_TMPDIR")).parent().unwrap();
+        let release = !cfg!(debug_assertions);
+        let profile_dir = target_dir.join(if release { "release" } else { "debug" });
         let mut build = Command::new(env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
         build
             .args(["build", "--bins", "-p", "quick-launcher-core-fixtures"])
             .arg("--target-dir")
             .arg(target_dir);
-        if profile_dir.file_name() == Some("release".as_ref()) {
+        if release {
             build.arg("--release");
         }
         let status = build.status().expect("cargo runs");
