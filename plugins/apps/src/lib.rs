@@ -90,6 +90,18 @@ pub struct App {
     /// `Keywords`, localized.
     pub keywords: Vec<String>,
     pub icon: Option<AppIcon>,
+    /// The command to run instead of launching by id, set only for an entry
+    /// whose id the platform can't launch ([`launchable_by_id`]).
+    pub exec: Option<Exec>,
+}
+
+/// An entry's command, from its `Exec`, `Path` and `Terminal` keys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Exec {
+    pub argv: Vec<String>,
+    pub cwd: Option<PathBuf>,
+    /// Run it in the user's terminal.
+    pub terminal: bool,
 }
 
 /// An app's `Icon`: a themed icon name, or an absolute path to an image.
@@ -112,8 +124,39 @@ impl App {
                 AppIcon::Path(path) => Icon::path(path),
             });
         }
-        item.action(Action::new("launch", "Launch").run(Run::app(self.id)))
+        let run = match self.exec {
+            None => Run::app(self.id),
+            Some(exec) => {
+                let run = if exec.terminal {
+                    Run::terminal(exec.argv)
+                } else {
+                    Run::exec(exec.argv)
+                };
+                match exec.cwd {
+                    Some(cwd) => run.cwd(cwd),
+                    None => run,
+                }
+            }
+        };
+        item.action(Action::new("launch", "Launch").run(run))
     }
+}
+
+/// Whether the platform can launch a desktop entry by its id. uwsm, which
+/// launches apps on Omarchy, takes only ids made of letters, digits, `_`,
+/// `.` and `-` that don't start with `.` or `-`, as D-Bus names are. Steam
+/// names its game shortcuts after the game (`ELDEN RING.desktop`), so those
+/// are launched by their `Exec` line instead.
+pub fn launchable_by_id(id: &str) -> bool {
+    let Some(stem) = id.strip_suffix(".desktop") else {
+        return false;
+    };
+    stem.chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+        && stem
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
 }
 
 /// Every app to show, sorted by name. An entry in an earlier data dir hides
@@ -134,7 +177,7 @@ pub fn find_apps(env: &Env) -> Vec<App> {
             match fs::read_to_string(&path) {
                 Ok(text) => {
                     seen.insert(id.clone());
-                    apps.extend(app(id, &text, env));
+                    apps.extend(app(id, &path, &text, env));
                 }
                 Err(e) => eprintln!("apps: reading {}: {e}", path.display()),
             }
@@ -145,7 +188,7 @@ pub fn find_apps(env: &Env) -> Vec<App> {
 }
 
 /// The app a desktop entry describes, or `None` when it isn't one to show.
-fn app(id: String, text: &str, env: &Env) -> Option<App> {
+fn app(id: String, path: &Path, text: &str, env: &Env) -> Option<App> {
     let entry = desktop::Entry::parse(text)?;
     if entry.string("Type").as_deref() != Some("Application")
         || entry.flag("NoDisplay")
@@ -180,12 +223,35 @@ fn app(id: String, text: &str, env: &Env) -> Option<App> {
                 AppIcon::Name(icon)
             }
         });
+    let exec = if launchable_by_id(&id) {
+        None
+    } else {
+        // Nothing else can launch it, so an entry without a usable `Exec`
+        // isn't shown.
+        let icon = entry.string("Icon").filter(|icon| !icon.is_empty());
+        let file = path.to_string_lossy();
+        let fields = desktop::Fields {
+            name: &name,
+            icon: icon.as_deref(),
+            file: &file,
+        };
+        let argv = desktop::exec_argv(&entry.string("Exec")?, &fields)?;
+        Some(Exec {
+            argv,
+            cwd: entry
+                .string("Path")
+                .filter(|dir| Path::new(dir).is_absolute())
+                .map(PathBuf::from),
+            terminal: entry.flag("Terminal"),
+        })
+    };
     Some(App {
         id,
         name,
         detail,
         keywords: entry.localized_list("Keywords", locale),
         icon,
+        exec,
     })
 }
 

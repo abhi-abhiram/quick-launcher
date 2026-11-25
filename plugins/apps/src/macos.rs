@@ -76,6 +76,7 @@ fn app(path: &Path) -> Option<App> {
         detail: None,
         keywords: Vec::new(),
         icon: Some(AppIcon::Path(path.to_path_buf())),
+        exec: None,
     })
 }
 
