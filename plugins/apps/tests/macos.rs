@@ -58,6 +58,7 @@ fn bundles_are_listed_by_name_with_their_path_as_id_and_icon() {
             detail: None,
             keywords: vec![],
             icon: Some(AppIcon::Path(safari.clone())),
+            exec: None,
         }
     );
 }

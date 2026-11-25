@@ -460,7 +460,7 @@ user triggers them is up to the frontend (see
 |------|--------|
 | `{"exec": [argv], "cwd": "..."}` | Start detached. |
 | `{"terminal": [argv], "cwd": "..."}` | Start in the user's terminal. |
-| `{"app": "<app id>"}` | Launch an installed app by its platform id (a desktop entry id such as `firefox.desktop` on Omarchy, a bundle path such as `/Applications/Safari.app` on macOS). Used by `apps`. |
+| `{"app": "<app id>"}` | Launch an installed app by its platform id (a desktop entry id such as `firefox.desktop` on Omarchy, a bundle path such as `/Applications/Safari.app` on macOS). Used by `apps`, which runs an entry whose id uwsm rejects (Steam names its game shortcuts `ELDEN RING.desktop`) by its `Exec` line with `exec` or `terminal` instead. |
 | `{"open": "url or path"}` | Open with the default handler. |
 | `{"copy": "text"}` | Put text on the clipboard. |
 | `{"plugin": "<action id>"}` | Send `activate` to the plugin and apply its `result`, which can name another form to run. |

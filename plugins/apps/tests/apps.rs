@@ -5,7 +5,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use quick_launcher_apps::{App, AppIcon, Env, Locale, find_apps};
+use quick_launcher_apps::{App, AppIcon, Env, Exec, Locale, find_apps};
 
 /// A user and a system data dir under a fresh temporary folder, removed on
 /// drop.
@@ -71,6 +71,7 @@ fn an_app_has_its_name_detail_keywords_and_icon() {
             detail: Some("Browse the Web".into()),
             keywords: vec!["Internet".into(), "WWW".into()],
             icon: Some(AppIcon::Name("firefox".into())),
+            exec: None,
         }]
     );
 }
@@ -319,6 +320,54 @@ fn apps_are_sorted_by_name_ignoring_case() {
     assert_eq!(names, ["Alacritty", "btop", "zed"]);
 }
 
+#[test]
+fn entries_with_valid_ids_launch_by_id() {
+    let dirs = Dirs::new("valid-ids");
+    entry(
+        &dirs.user(),
+        "org.gnome.Nautilus.desktop",
+        "Name=Files\nExec=nautilus\n",
+    );
+    entry(&dirs.user(), "_x-1.desktop", "Name=X\nExec=x\n");
+    let apps = find_apps(&dirs.env());
+    assert_eq!(ids(&apps), ["org.gnome.Nautilus.desktop", "_x-1.desktop"]);
+    assert!(apps.iter().all(|app| app.exec.is_none()));
+}
+
+#[test]
+fn entries_whose_ids_cannot_be_launched_run_their_exec_line() {
+    let dirs = Dirs::new("invalid-ids");
+    entry(
+        &dirs.user(),
+        "ELDEN RING.desktop",
+        "Name=ELDEN RING\nExec=steam steam://rungameid/1245620\nIcon=steam_icon_1245620\n",
+    );
+    entry(
+        &dirs.user(),
+        "-tool.desktop",
+        "Name=Tool\nExec=\"/opt/my tool/run\" %u --title=%c\nPath=/opt/my tool\nTerminal=true\n",
+    );
+    entry(&dirs.user(), "No Exec.desktop", "Name=No Exec\n");
+    let apps = find_apps(&dirs.env());
+    assert_eq!(ids(&apps), ["ELDEN RING.desktop", "-tool.desktop"]);
+    assert_eq!(
+        apps[0].exec,
+        Some(Exec {
+            argv: vec!["steam".into(), "steam://rungameid/1245620".into()],
+            cwd: None,
+            terminal: false,
+        })
+    );
+    assert_eq!(
+        apps[1].exec,
+        Some(Exec {
+            argv: vec!["/opt/my tool/run".into(), "--title=Tool".into()],
+            cwd: Some("/opt/my tool".into()),
+            terminal: true,
+        })
+    );
+}
+
 // On macOS the binary lists bundles instead; tests/macos.rs checks that.
 #[cfg(not(target_os = "macos"))]
 #[test]
@@ -337,6 +386,11 @@ fn the_binary_answers_a_list_request_with_launch_actions() {
         &dirs.system(),
         "tool.desktop",
         "Name=Tool\nIcon=/opt/tool.svg\n",
+    );
+    entry(
+        &dirs.system(),
+        "My Game.desktop",
+        "Name=My Game\nExec=steam steam://rungameid/7\n",
     );
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_apps"))
@@ -369,6 +423,9 @@ fn the_binary_answers_a_list_request_with_launch_actions() {
             {"id": "firefox.desktop", "label": "Firefox", "detail": "Browse the Web",
              "icon": {"name": "firefox"}, "keywords": ["web"],
              "actions": [{"id": "launch", "title": "Launch", "run": {"app": "firefox.desktop"}}]},
+            {"id": "My Game.desktop", "label": "My Game",
+             "actions": [{"id": "launch", "title": "Launch",
+                          "run": {"exec": ["steam", "steam://rungameid/7"]}}]},
             {"id": "tool.desktop", "label": "Tool", "icon": {"path": "/opt/tool.svg"},
              "actions": [{"id": "launch", "title": "Launch", "run": {"app": "tool.desktop"}}]},
         ]})
