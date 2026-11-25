@@ -136,6 +136,100 @@ impl Locale {
     }
 }
 
+/// What an entry's field codes expand to. No files or URLs are passed, so
+/// `%f`, `%F`, `%u` and `%U` expand to nothing.
+pub struct Fields<'a> {
+    /// `Name`, for `%c`.
+    pub name: &'a str,
+    /// `Icon`, for `%i`.
+    pub icon: Option<&'a str>,
+    /// The entry file's path, for `%k`.
+    pub file: &'a str,
+}
+
+/// An `Exec` value, already unescaped as a string, split into argv with its
+/// field codes expanded. `None` when it's empty or its quoting is broken.
+///
+/// Arguments are separated by spaces; one in double quotes keeps its spaces,
+/// and inside the quotes a backslash escapes `"`, `` ` ``, `$` and `\`. An
+/// argument that's only a field code expanding to nothing is dropped, and
+/// `%i` alone becomes `--icon <icon>`. Deprecated and unknown codes expand to
+/// nothing.
+pub fn exec_argv(exec: &str, fields: &Fields) -> Option<Vec<String>> {
+    let mut argv = Vec::new();
+    for (arg, quoted) in split_exec(exec)? {
+        if !quoted && arg == "%i" {
+            if let Some(icon) = fields.icon {
+                argv.extend(["--icon".to_string(), icon.to_string()]);
+            }
+            continue;
+        }
+        let expanded = expand(&arg, fields);
+        if !expanded.is_empty() || quoted || !is_field_code(&arg) {
+            argv.push(expanded);
+        }
+    }
+    (!argv.is_empty() && !argv[0].is_empty()).then_some(argv)
+}
+
+/// The arguments of an `Exec` value, each with whether it was quoted.
+fn split_exec(exec: &str) -> Option<Vec<(String, bool)>> {
+    let mut args = Vec::new();
+    let mut chars = exec.chars().peekable();
+    loop {
+        while chars.next_if(|c| *c == ' ' || *c == '\t').is_some() {}
+        let Some(first) = chars.next() else {
+            return Some(args);
+        };
+        let mut arg = String::new();
+        if first == '"' {
+            loop {
+                match chars.next()? {
+                    '"' => break,
+                    '\\' => match chars.next()? {
+                        c @ ('"' | '`' | '$' | '\\') => arg.push(c),
+                        c => {
+                            arg.push('\\');
+                            arg.push(c);
+                        }
+                    },
+                    c => arg.push(c),
+                }
+            }
+            args.push((arg, true));
+        } else {
+            arg.push(first);
+            while let Some(c) = chars.next_if(|c| *c != ' ' && *c != '\t') {
+                arg.push(c);
+            }
+            args.push((arg, false));
+        }
+    }
+}
+
+fn is_field_code(arg: &str) -> bool {
+    arg.len() == 2 && arg.starts_with('%') && arg != "%%"
+}
+
+fn expand(arg: &str, fields: &Fields) -> String {
+    let mut out = String::with_capacity(arg.len());
+    let mut chars = arg.chars();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('%') => out.push('%'),
+            Some('c') => out.push_str(fields.name),
+            Some('k') => out.push_str(fields.file),
+            Some('i') => out.push_str(fields.icon.unwrap_or_default()),
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Undoes `\s`, `\n`, `\t`, `\r`, `\\` and, harmlessly outside lists, `\;`.
 /// An unknown escape is kept as written.
 fn unescape(raw: &str) -> String {
@@ -229,6 +323,48 @@ mod tests {
         assert_eq!(name("sr_ME"), "sr");
         assert_eq!(name("de_DE.UTF-8"), "Plain");
         assert_eq!(name("C.UTF-8"), "Plain");
+    }
+
+    fn exec(value: &str, icon: Option<&str>) -> Option<Vec<String>> {
+        let fields = Fields {
+            name: "My App",
+            icon,
+            file: "/apps/my app.desktop",
+        };
+        exec_argv(value, &fields)
+    }
+
+    #[test]
+    fn exec_splits_on_spaces_and_keeps_quoted_ones() {
+        assert_eq!(
+            exec(r#"steam  steam://rungameid/1 "a b" "q\"\`\$\\x\y""#, None).unwrap(),
+            ["steam", "steam://rungameid/1", "a b", r#"q"`$\x\y"#]
+        );
+        assert_eq!(exec("prog \"\"", None).unwrap(), ["prog", ""]);
+    }
+
+    #[test]
+    fn exec_expands_field_codes() {
+        assert_eq!(
+            exec("prog %U --name=%c %k %i 100%% %d", Some("icon")).unwrap(),
+            [
+                "prog",
+                "--name=My App",
+                "/apps/my app.desktop",
+                "--icon",
+                "icon",
+                "100%"
+            ]
+        );
+        assert_eq!(exec("prog %i %f", None).unwrap(), ["prog"]);
+    }
+
+    #[test]
+    fn exec_is_none_when_empty_or_unterminated() {
+        assert!(exec("", None).is_none());
+        assert!(exec("  %f ", None).is_none());
+        assert!(exec("prog \"open", None).is_none());
+        assert!(exec("prog \"x\\", None).is_none());
     }
 
     #[test]
